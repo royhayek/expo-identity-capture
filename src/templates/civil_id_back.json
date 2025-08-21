@@ -1,0 +1,10 @@
+{
+  "docType": "civil_id_back",
+  "size": { "w": 860, "h": 540 },
+  "fields": {
+    "motherName": { "x": 0.08, "y": 0.25, "w": 0.84, "h": 0.12 },
+    "fatherName": { "x": 0.08, "y": 0.42, "w": 0.84, "h": 0.12 },
+    "dateOfIssue": { "x": 0.08, "y": 0.58, "w": 0.32, "h": 0.10 },
+    "dateOfExpiry": { "x": 0.45, "y": 0.58, "w": 0.32, "h": 0.10 }
+  }
+}

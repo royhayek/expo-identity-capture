@@ -1,0 +1,13 @@
+{
+  "docType": "civil_id_front",
+  "size": { "w": 860, "h": 540 },
+  "fields": {
+    "documentNumber": { "x": 0.62, "y": 0.12, "w": 0.30, "h": 0.10 },
+    "fullNameArabic": { "x": 0.08, "y": 0.25, "w": 0.84, "h": 0.14 },
+    "fullNameLatin": { "x": 0.08, "y": 0.42, "w": 0.84, "h": 0.12 },
+    "dateOfBirth": { "x": 0.08, "y": 0.58, "w": 0.32, "h": 0.10 },
+    "placeOfBirth": { "x": 0.45, "y": 0.58, "w": 0.47, "h": 0.10 },
+    "nationality": { "x": 0.08, "y": 0.72, "w": 0.30, "h": 0.08 },
+    "sex": { "x": 0.45, "y": 0.72, "w": 0.15, "h": 0.08 }
+  }
+}

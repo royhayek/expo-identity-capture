@@ -1,5 +1,20 @@
-export { DocumentCaptureAPI } from "./api/documentCapture";
-export { SelfieCaptureAPI } from "./api/selfieCapture";
+// New unified API (recommended for new integrations)
+export {
+  captureAndExtract,
+  captureMultipleDocuments,
+  detectDocumentType,
+  validateExtractedData
+} from "./api/documentCapture";
+
+// Import for the unified API object
+import { 
+  captureAndExtract,
+  captureMultipleDocuments,
+  detectDocumentType,
+  validateExtractedData
+} from "./api/documentCapture";
+
+// Component and utility exports
 export { IdentityCaptureProvider } from "./components/IdentityCaptureProvider";
 export { LocalizationManager, createLocalizedStrings } from "./localization";
 export { arabicStrings } from "./localization/languages/arabic";
@@ -23,18 +38,21 @@ export type {
   CameraFrameGuide,
 } from "./types";
 
-import { DocumentCaptureAPI } from "./api/documentCapture";
-import { SelfieCaptureAPI } from "./api/selfieCapture";
+// New extraction types
+export type {
+  VerifiedDocType,
+  OcrField,
+  ExtractedIdResult,
+  DocumentTemplate,
+  CaptureOptions,
+  QualityMetrics
+} from "./types/extraction";
 
-export const captureDocument = DocumentCaptureAPI.captureDocument.bind(DocumentCaptureAPI);
-export const captureSelfie = SelfieCaptureAPI.captureSelfie.bind(SelfieCaptureAPI);
-
+// Main unified API object
 export const IdentityCapture = {
-  captureDocument,
-  captureSelfie,
-  isCapturing: () => DocumentCaptureAPI.isCapturing() || SelfieCaptureAPI.isCapturing(),
-  cancelCurrentCapture: () => {
-    DocumentCaptureAPI.cancelCurrentCapture();
-    SelfieCaptureAPI.cancelCurrentCapture();
-  },
+  // New API methods (recommended)
+  captureAndExtract,
+  captureMultipleDocuments,
+  detectDocumentType,
+  validateExtractedData
 };
