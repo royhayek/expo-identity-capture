@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "es2018",
+    "lib": [
+      "es2018",
+      "dom"
+    ],
+    "module": "commonjs",
+    "declaration": true,
+    "outDir": "./lib",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": false,
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true,
+    "jsx": "react-jsx",
+    "noImplicitAny": false,
+    "allowJs": true,
+    "noResolve": false,
+    "isolatedModules": false
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "lib",
+    "demo",
+    "demo-app",
+    "example"
+  ]
+}

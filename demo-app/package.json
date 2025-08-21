@@ -1,0 +1,30 @@
+{
+  "name": "expo-identity-capture-demo",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "~52.0.0",
+    "expo-camera": "~16.0.0",
+    "expo-image-manipulator": "~13.0.0",
+    "expo-image-picker": "~15.0.0",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "0.76.0",
+    "expo-identity-capture": "file:.."
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@types/react": "~18.3.0",
+    "typescript": "^5.3.0"
+  },
+  "resolutions": {
+    "deprecated-react-native-prop-types": "^4.1.0"
+  },
+  "private": true
+}

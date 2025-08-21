@@ -1,0 +1,23 @@
+import { LocalizedStrings } from '../types';
+
+export const defaultStrings: LocalizedStrings = {
+  capture: 'Capture',
+  retake: 'Retake',
+  flashOn: 'Flash On',
+  flashOff: 'Flash Off',
+  captureDocument: 'Capture Document',
+  captureSelfie: 'Capture Selfie',
+  capturePassport: 'Capture Passport',
+  captureCivilIdFront: 'Capture Civil ID - Front',
+  captureCivilIdBack: 'Capture Civil ID - Back',
+  captureArmyCard: 'Capture Army Card',
+  captureResidencePermit: 'Capture Residence Permit',
+  documentRequired: 'Document photo is required',
+  selfieRequired: 'Selfie is required',
+  cancel: 'Cancel',
+  done: 'Done',
+  loading: 'Loading...',
+  error: 'An error occurred',
+  cameraPermissionDenied: 'Camera permission is required to capture photos',
+  cameraNotAvailable: 'Camera is not available on this device',
+};
