@@ -48,6 +48,17 @@ export type {
   QualityMetrics
 } from "./types/extraction";
 
+// Direct DocumentScanner access for backwards compatibility
+let DocumentScanner: any = null;
+try {
+  DocumentScanner = require("react-native-document-scanner-plugin");
+} catch (error) {
+  console.warn("react-native-document-scanner-plugin not available");
+}
+
+// Export DocumentScanner for direct access
+export { DocumentScanner };
+
 // Main unified API object
 export const IdentityCapture = {
   // New API methods (recommended)
