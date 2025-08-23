@@ -9,6 +9,15 @@ export interface DocumentCaptureResult {
   images: string[];
   sides?: DocumentSide[];
   capturedAt: string;
+  passportDetection?: {
+    isLebanese: boolean;
+    confidence: number;
+    detectedKeywords: string[];
+    providers: {
+      tesseract: { success: boolean; text: string; confidence: number };
+      expoText: { success: boolean; text: string; confidence: number };
+    };
+  };
 }
 
 export interface SelfieCaptureResult {

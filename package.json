@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "React Native package for capturing ID documents and selfies in Expo prebuild apps",
   "main": "lib/index.js",
+  "module": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
     "build": "tsc",
@@ -26,18 +27,25 @@
     "expo": ">=52.0.0",
     "expo-camera": ">=16.0.0",
     "expo-image-manipulator": ">=13.0.0",
-    "expo-image-picker": ">=15.0.0"
+    "expo-image-picker": ">=15.0.0",
+    "@devinikhiya/react-native-tesseractocr": ">=0.1.10",
+    "expo-text-extractor": ">=0.2.2",
+    "@react-native-ml-kit/text-recognition": ">=1.0.0"
   },
+  "dependencies": {},
   "devDependencies": {
     "@types/react": "^18.2.0",
     "@types/react-native": "^0.72.0",
     "react": "^18.2.0",
     "react-native": "^0.72.0",
-    "expo": "^49.0.0",
+    "expo": "^53.0.0",
     "expo-camera": "^16.0.0",
     "expo-image-manipulator": "^13.0.0",
     "expo-image-picker": "^15.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "expo-text-extractor": "^0.2.2",
+    "@devinikhiya/react-native-tesseractocr": "^0.1.10",
+    "@react-native-ml-kit/text-recognition": "^1.0.0"
   },
   "files": [
     "lib",

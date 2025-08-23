@@ -6,6 +6,7 @@ export { arabicStrings } from "./localization/languages/arabic";
 export { frenchStrings } from "./localization/languages/french";
 export { FlowRules } from "./utils/flowRules";
 export { ImageProcessor } from "./utils/imageProcessor";
+export { PassportDetector } from "./utils/passportDetector";
 
 export type {
   DocumentType,
@@ -22,6 +23,8 @@ export type {
   CaptureStep,
   CameraFrameGuide,
 } from "./types";
+
+export type { PassportDetectionResult } from "./utils/passportDetector";
 
 import { DocumentCaptureAPI } from "./api/documentCapture";
 import { SelfieCaptureAPI } from "./api/selfieCapture";
