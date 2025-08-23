@@ -1,8 +1,8 @@
-export type DocumentType = 'passport' | 'civil_id' | 'army_card' | 'residence_permit';
+export type DocumentType = "passport" | "civil_id" | "army_card" | "residence_permit";
 
-export type DocumentSide = 'front' | 'back';
+export type DocumentSide = "front" | "back";
 
-export type OutputFormat = 'uri' | 'base64';
+export type OutputFormat = "uri" | "base64";
 
 export interface DocumentCaptureResult {
   type: DocumentType;
@@ -15,6 +15,7 @@ export interface DocumentCaptureResult {
     detectedKeywords: string[];
     providers: {
       tesseract: { success: boolean; text: string; confidence: number };
+      mlKit: { success: boolean; text: string; confidence: number };
       expoText: { success: boolean; text: string; confidence: number };
     };
   };
@@ -53,6 +54,8 @@ export interface LocalizedStrings {
   error?: string;
   cameraPermissionDenied?: string;
   cameraNotAvailable?: string;
+  captureDocumentInstruction?: string;
+  captureSelfieInstruction?: string;
 }
 
 export interface CaptureCallbacks {

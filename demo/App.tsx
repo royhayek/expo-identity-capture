@@ -35,6 +35,9 @@ export default function App() {
   const handleDocumentCapture = async (documentType: DocumentType) => {
     try {
       const result = await captureDocument(documentType, {
+        enableMultiCapture: true,
+        enablePassportDetection: true,
+        type: documentType,
         output: "uri",
         quality: 0.8,
         maxWidth: 1920,

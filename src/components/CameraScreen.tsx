@@ -28,7 +28,7 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 }) => {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<CameraType>(isSelfie ? "front" : "back");
-  const [flash, setFlash] = useState<FlashMode>("off");
+  const [flash] = useState<FlashMode>("off");
   const [isCapturing, setIsCapturing] = useState(false);
   const cameraRef = useRef<CameraView>(null);
 
@@ -51,6 +51,12 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
       default:
         return strings.captureDocument || "Capture Document";
     }
+  };
+
+  const getInstructionText = (): string => {
+    if (isSelfie)
+      return strings.captureSelfieInstruction || "Please position your face in the circle and look into the camera";
+    return strings.captureSelfieInstruction || "Please position the ID in the white space";
   };
 
   const getFrameGuide = () => {
@@ -95,10 +101,6 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
     }
   };
 
-  const toggleFlash = () => {
-    setFlash(flash === "off" ? "on" : "off");
-  };
-
   if (!permission) {
     return (
       <View style={styles.container}>
@@ -125,28 +127,29 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden />
-
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onCancel} style={styles.cancelButton}>
-          <Text style={styles.cancelText}>{strings.cancel || "Cancel"}</Text>
-        </TouchableOpacity>
-
-        <Text style={styles.title}>{getTitle()}</Text>
-
-        <TouchableOpacity onPress={toggleFlash} style={styles.flashButton}>
-          <Text style={styles.flashText}>
-            {flash === "on" ? strings.flashOn || "Flash On" : strings.flashOff || "Flash Off"}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
       <View style={styles.cameraContainer}>
         <CameraView ref={cameraRef} style={styles.camera} facing={facing} flash={flash}>
+          {/* Header with back arrow and title */}
+          <View style={styles.header}>
+            <TouchableOpacity onPress={onCancel} style={styles.backButton}>
+              <Text style={styles.backArrow}>←</Text>
+            </TouchableOpacity>
+            <Text style={styles.title}>{getTitle()}</Text>
+            <View style={styles.headerSpacer} />
+          </View>
+
+          {/* Instruction text */}
+          <View style={styles.instructionContainer}>
+            <Text style={styles.instructionText}>{getInstructionText()}</Text>
+          </View>
+
+          {/* Overlay with frame guide */}
           <View style={styles.overlay}>
             <View
               style={[
-                styles.frameGuide,
+                isSelfie ? styles.faceGuide : styles.documentFrameGuide,
                 {
                   width: frameGuide.width,
                   height: frameGuide.height,
@@ -155,17 +158,18 @@ export const CameraScreen: React.FC<CameraScreenProps> = ({
               ]}
             />
           </View>
-        </CameraView>
-      </View>
 
-      <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.captureButton, isCapturing && styles.capturingButton]}
-          onPress={handleCapture}
-          disabled={isCapturing}
-        >
-          <View style={styles.captureButtonInner} />
-        </TouchableOpacity>
+          {/* Bottom controls */}
+          <View style={styles.controls}>
+            <TouchableOpacity
+              style={[styles.captureButton, isCapturing && styles.capturingButton]}
+              onPress={handleCapture}
+              disabled={isCapturing}
+            >
+              <View style={[styles.captureButtonInner, isSelfie && styles.selfieButtonInner]} />
+            </TouchableOpacity>
+          </View>
+        </CameraView>
       </View>
     </View>
   );
@@ -176,77 +180,109 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "black",
   },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingTop: 50,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
-  },
-  cancelButton: {
-    padding: 10,
-  },
-  cancelText: {
-    color: "white",
-    fontSize: 16,
-  },
-  title: {
-    color: "white",
-    fontSize: 18,
-    fontWeight: "bold",
-    textAlign: "center",
-    flex: 1,
-  },
-  flashButton: {
-    padding: 10,
-  },
-  flashText: {
-    color: "white",
-    fontSize: 14,
-  },
   cameraContainer: {
     flex: 1,
   },
   camera: {
     flex: 1,
   },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  backArrow: {
+    color: "white",
+    fontSize: 24,
+    fontWeight: "bold",
+  },
+  title: {
+    color: "white",
+    fontSize: 18,
+    fontWeight: "600",
+    textAlign: "center",
+    flex: 1,
+  },
+  headerSpacer: {
+    width: 40,
+  },
+  instructionContainer: {
+    position: "absolute",
+    top: 140,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 10,
+  },
+  instructionText: {
+    color: "white",
+    fontSize: 16,
+    textAlign: "center",
+    fontWeight: "400",
+  },
   overlay: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    backgroundColor: "rgba(0, 0, 0, 0.4)",
   },
-  frameGuide: {
+  documentFrameGuide: {
+    borderWidth: 4,
+    borderColor: "#00FF00",
+    backgroundColor: "transparent",
+    borderStyle: "solid",
+  },
+  faceGuide: {
     borderWidth: 3,
     borderColor: "white",
     backgroundColor: "transparent",
+    borderStyle: "solid",
   },
   controls: {
-    height: 120,
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 140,
     justifyContent: "center",
     alignItems: "center",
+    paddingBottom: 40,
   },
   captureButton: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: "white",
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 3,
-    borderColor: "rgba(255, 255, 255, 0.5)",
+    borderWidth: 4,
+    borderColor: "white",
   },
   capturingButton: {
     opacity: 0.7,
   },
   captureButtonInner: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: "white",
+  },
+  selfieButtonInner: {
+    backgroundColor: "#00E5C7",
   },
   errorText: {
     color: "white",

@@ -122,10 +122,14 @@ export class PassportDetector {
     try {
       const available = await TesseractNativeOCR.isAvailable();
       if (!available) {
+        logger.info("Tesseract", "Not available");
         return { text: "", confidence: 0, success: false };
       }
-      return await TesseractNativeOCR.extractText(imageUri);
+      const result = await TesseractNativeOCR.extractText(imageUri);
+      logger.info("Tesseract", `${result.success ? 'Success' : 'Failed'} - ${result.text.length} characters`);
+      return result;
     } catch (error) {
+      logger.info("Tesseract", "Failed - Error");
       return { text: "", confidence: 0, success: false };
     }
   }
@@ -134,10 +138,14 @@ export class PassportDetector {
     try {
       const available = await MLKitOCR.isAvailable();
       if (!available) {
+        logger.info("ML Kit", "Not available");
         return { text: "", confidence: 0, success: false };
       }
-      return await MLKitOCR.extractText(imageUri);
+      const result = await MLKitOCR.extractText(imageUri);
+      logger.info("ML Kit", `${result.success ? 'Success' : 'Failed'} - ${result.text.length} characters`);
+      return result;
     } catch (error) {
+      logger.info("ML Kit", "Failed - Error");
       return { text: "", confidence: 0, success: false };
     }
   }
@@ -146,10 +154,14 @@ export class PassportDetector {
     try {
       const available = await ExpoTextExtractorOCR.isAvailable();
       if (!available) {
+        logger.info("Expo Text", "Not available");
         return { text: "", confidence: 0, success: false };
       }
-      return await ExpoTextExtractorOCR.extractText(imageUri);
+      const result = await ExpoTextExtractorOCR.extractText(imageUri);
+      logger.info("Expo Text", `${result.success ? 'Success' : 'Failed'} - ${result.text.length} characters`);
+      return result;
     } catch (error) {
+      logger.info("Expo Text", "Failed - Error");
       return { text: "", confidence: 0, success: false };
     }
   }

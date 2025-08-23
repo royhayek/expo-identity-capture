@@ -28,15 +28,36 @@ export type { PassportDetectionResult } from "./utils/passportDetector";
 
 import { DocumentCaptureAPI } from "./api/documentCapture";
 import { SelfieCaptureAPI } from "./api/selfieCapture";
+import {
+  DocumentType,
+  DocumentCaptureOptions,
+  SelfieCaptureOptions,
+  DocumentCaptureResult,
+  SelfieCaptureResult,
+} from "./types";
 
-export const captureDocument = DocumentCaptureAPI.captureDocument.bind(DocumentCaptureAPI);
-export const captureSelfie = SelfieCaptureAPI.captureSelfie.bind(SelfieCaptureAPI);
+// Properly typed function exports
+export const captureDocument = (
+  type: DocumentType,
+  options?: Partial<DocumentCaptureOptions>
+): Promise<DocumentCaptureResult> => {
+  return DocumentCaptureAPI.captureDocument(type, options);
+};
 
+export const captureSelfie = (options?: Partial<SelfieCaptureOptions>): Promise<SelfieCaptureResult> => {
+  return SelfieCaptureAPI.captureSelfie(options);
+};
+
+// Main API object with proper typing
 export const IdentityCapture = {
-  captureDocument,
-  captureSelfie,
-  isCapturing: () => DocumentCaptureAPI.isCapturing() || SelfieCaptureAPI.isCapturing(),
-  cancelCurrentCapture: () => {
+  captureDocument: (type: DocumentType, options?: Partial<DocumentCaptureOptions>): Promise<DocumentCaptureResult> => {
+    return DocumentCaptureAPI.captureDocument(type, options);
+  },
+  captureSelfie: (options?: Partial<SelfieCaptureOptions>): Promise<SelfieCaptureResult> => {
+    return SelfieCaptureAPI.captureSelfie(options);
+  },
+  isCapturing: (): boolean => DocumentCaptureAPI.isCapturing() || SelfieCaptureAPI.isCapturing(),
+  cancelCurrentCapture: (): void => {
     DocumentCaptureAPI.cancelCurrentCapture();
     SelfieCaptureAPI.cancelCurrentCapture();
   },
