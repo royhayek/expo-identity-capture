@@ -1,0 +1,33 @@
+{
+  "name": "indenty-verification-example",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "clean:install": "rm -rf node_modules && rm -rf package-lock.json && npm install && cd ios && rm -rf Pods && rm -rf Podfile.lock && pod install && cd .. && npx expo prebuild && npx expo run:ios --device=00008140-0009303E1184801C"
+  },
+  "dependencies": {
+    "@react-native-ml-kit/text-recognition": "^1.0.0",
+    "expo": "~53.0.22",
+    "expo-camera": "~16.1.11",
+    "expo-constants": "~17.1.7",
+    "expo-identity-capture": "file:..",
+    "expo-image-manipulator": "~13.1.7",
+    "expo-image-picker": "~16.1.4",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.5",
+    "react-native-document-scanner-plugin": "^1.0.0",
+    "react-native-vision-camera": "^4.7.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@types/react": "~19.0.10",
+    "@types/react-native": "^0.73.0",
+    "typescript": "~5.8.3"
+  },
+  "private": true
+}
