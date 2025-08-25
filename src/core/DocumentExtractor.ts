@@ -8,7 +8,6 @@ import {
 } from "../types/extraction";
 import MLKit from "@react-native-ml-kit/text-recognition";
 import DocumentScanner, { ResponseType } from "react-native-document-scanner-plugin";
-import { MRZScanner } from "../utils/mrzScanner";
 
 // Enhanced text preprocessing and analysis
 interface TextAnalysisResult {
@@ -48,12 +47,8 @@ export class DocumentExtractor {
       // Step 2: Document type detection with multiple methods
       const docType = await this.detectDocumentTypeAdvanced(captureResult.processedImageUri, options.docHint);
 
-      // Step 3: Route to appropriate extraction pipeline
-      if (this.hasMRZ(docType)) {
-        return await this.extractMRZDocument(captureResult, docType);
-      } else {
-        return await this.extractOCRDocument(captureResult, docType);
-      }
+      // Step 3: Use OCR extraction for all documents
+      return await this.extractOCRDocument(captureResult, docType);
     } catch (error) {
       console.error("❌ Document extraction failed:", error);
       throw error;
@@ -125,12 +120,6 @@ export class DocumentExtractor {
         confidence: textAnalysis.confidence
       });
 
-      // Check for MRZ presence first
-      const hasMRZ = await this.detectMRZPresenceAdvanced(textAnalysis.text);
-      if (hasMRZ) {
-        console.log("📋 MRZ detected - document is passport or residence permit");
-        return "passport"; // Default to passport for MRZ documents
-      }
 
       // Analyze text content for document type clues
       const docTypeFromContent = this.analyzeContentForDocType(textAnalysis);
@@ -312,6 +301,10 @@ export class DocumentExtractor {
       army_card: [
         "army", "military", "force", "armed", "service",
         "الجيش", "عسكري", "قوات", "مسلحة", "خدمة"
+      ],
+      residence_permit: [
+        "residence", "permit", "visa", "stay", "resident",
+        "إقامة", "تصريح", "تأشيرة", "مقيم", "الإقامة"
       ]
     };
 
@@ -319,6 +312,7 @@ export class DocumentExtractor {
       civil_id: 0,
       passport: 0,
       army_card: 0,
+      residence_permit: 0,
     };
 
     // Score each document type based on keyword matches
@@ -344,113 +338,6 @@ export class DocumentExtractor {
     return winner;
   }
 
-  /**
-   * Enhanced MRZ presence detection
-   */
-  private static async detectMRZPresenceAdvanced(text: string): Promise<boolean> {
-    // Look for MRZ patterns with scoring
-    const lines = text.split(/\r?\n/).map(line => line.trim());
-    
-    for (const line of lines) {
-      // Check for passport MRZ line 1 pattern
-      const line1Score = this.scoreMRZLikeLine(line, 1);
-      const line2Score = this.scoreMRZLikeLine(line, 2);
-      
-      if (line1Score > 0.7 || line2Score > 0.7) {
-        console.log(`✅ High-confidence MRZ pattern found: "${line}" (L1: ${line1Score.toFixed(2)}, L2: ${line2Score.toFixed(2)})`);
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  /**
-   * Score how likely a line is to be an MRZ line
-   */
-  private static scoreMRZLikeLine(line: string, lineType: 1 | 2): number {
-    const cleanLine = line.replace(/\s+/g, "").toUpperCase();
-    
-    if (lineType === 1) {
-      // MRZ Line 1: P<COUNTRY<LASTNAME<<FIRSTNAME<...
-      let score = 0;
-      if (/^P[<«]/.test(cleanLine)) score += 0.4;
-      if (/^P[<«][A-Z]{3}/.test(cleanLine)) score += 0.3;
-      if (cleanLine.includes("<<") || cleanLine.includes("««")) score += 0.2;
-      if (Math.abs(cleanLine.length - 44) <= 5) score += 0.1;
-      return score;
-    } else {
-      // MRZ Line 2: PASSNUM<CNTRYYYMMDDXSEXYYMMDDX...
-      let score = 0;
-      if (/^[A-Z]{2}[0-9A-Z]{6,}/.test(cleanLine)) score += 0.3;
-      if (/[A-Z]{3}\d{6}/.test(cleanLine)) score += 0.3; // Country + date
-      if (/[MF]/.test(cleanLine)) score += 0.2;
-      if (Math.abs(cleanLine.length - 44) <= 5) score += 0.2;
-      return score;
-    }
-  }
-
-  /**
-   * Check if document type has MRZ
-   */
-  private static hasMRZ(docType: VerifiedDocType): boolean {
-    return docType === "passport" || docType === "residence_permit";
-  }
-
-  /**
-   * Extract MRZ-based documents with enhanced processing
-   */
-  private static async extractMRZDocument(captureResult: any, docType: VerifiedDocType): Promise<ExtractedIdResult> {
-    console.log(`📋 Extracting MRZ document: ${docType}`);
-
-    try {
-      // Use the enhanced MRZ scanner
-      const mrzData = await MRZScanner.extractMRZFromImage(captureResult.processedImageUri);
-
-      if (!mrzData) {
-        throw new Error("No valid MRZ found in document");
-      }
-
-      console.log("✅ MRZ extraction successful:", {
-        valid: mrzData.valid,
-        document: mrzData.passportNumber,
-        name: `${mrzData.firstName} ${mrzData.lastName}`
-      });
-
-      // Convert to our standard format
-      const confidence = mrzData.valid ? 0.95 : 0.7;
-      const fields = {
-        documentNumber: this.createOcrField(mrzData.passportNumber, confidence, "mrz"),
-        surname: this.createOcrField(mrzData.lastName, confidence, "mrz"),
-        givenNames: this.createOcrField(mrzData.firstName, confidence, "mrz"),
-        dateOfBirth: this.createOcrField(mrzData.dateOfBirth, confidence, "mrz"),
-        sex: this.createOcrField(mrzData.sex, confidence, "mrz"),
-        nationality: this.createOcrField(mrzData.nationality, confidence, "mrz"),
-        dateOfExpiry: this.createOcrField(mrzData.expirationDate, confidence, "mrz"),
-      };
-
-      return {
-        docType,
-        originalImageUri: captureResult.originalImageUri,
-        processedImageUri: captureResult.processedImageUri,
-        fields,
-        mrz: {
-          raw: `${mrzData.documentType}<${mrzData.issuingCountry}<${mrzData.lastName}<<${mrzData.firstName}`,
-          type: "TD3",
-          checks: {
-            documentNumber: mrzData.validationDetails.passportNumberValid,
-            dob: mrzData.validationDetails.dateOfBirthValid,
-            expiry: mrzData.validationDetails.expirationDateValid,
-            composite: mrzData.validationDetails.compositeValid,
-          },
-        },
-        quality: captureResult.quality,
-      };
-    } catch (error) {
-      console.error("❌ MRZ extraction failed:", error);
-      throw error;
-    }
-  }
 
   /**
    * Enhanced OCR-based document extraction
@@ -608,7 +495,72 @@ export class DocumentExtractor {
       };
     }
 
-    // For other document types (passport, etc.) - keep original patterns
+    // For passport
+    if (docType === "passport") {
+      return {
+        documentNumber: {
+          pattern: /\b[A-Z]{2}\d{7,9}\b|\b\d{8,15}\b/g,
+          confidence: 0.8,
+          contextKeywords: ["passport", "number", "جواز", "رقم"]
+        },
+        surname: {
+          pattern: /\b[A-Z][a-z]+ ?[A-Z]?[a-z]*\b/g,
+          confidence: 0.7,
+          contextKeywords: ["surname", "family", "last name", "اللقب", "العائلة"]
+        },
+        givenNames: {
+          pattern: /\b[A-Z][a-z]+ ?(?:[A-Z][a-z]+ ?)*\b/g,
+          confidence: 0.7,
+          contextKeywords: ["given", "first", "name", "الاسم", "الأول"]
+        },
+        dateOfBirth: {
+          pattern: /\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\b|\b(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})\b/g,
+          processor: (match: string) => this.normalizeDateFormat(match),
+          confidence: 0.9,
+          contextKeywords: ["birth", "born", "ولادة", "تاريخ"]
+        },
+        nationality: {
+          pattern: /\b(lebanese|لبناني|لبنانية)\b/gi,
+          confidence: 0.9,
+          contextKeywords: ["nationality", "الجنسية"]
+        },
+        dateOfExpiry: {
+          pattern: /\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\b|\b(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})\b/g,
+          processor: (match: string) => this.normalizeDateFormat(match),
+          confidence: 0.9,
+          contextKeywords: ["expiry", "expires", "valid until", "انتهاء", "صلاحية"]
+        }
+      };
+    }
+    
+    // For residence permit
+    if (docType === "residence_permit") {
+      return {
+        documentNumber: {
+          pattern: /\b\d{8,15}\b/g,
+          confidence: 0.8,
+          contextKeywords: ["number", "رقم", "permit", "تصريح"]
+        },
+        fullNameArabic: {
+          pattern: /[\u0600-\u06FF][\u0600-\u06FF\s]{4,50}/g,
+          confidence: 0.7,
+          contextKeywords: ["الاسم", "اسم"]
+        },
+        nationality: {
+          pattern: /\b[A-Za-z]{4,20}\b/g,
+          confidence: 0.7,
+          contextKeywords: ["nationality", "الجنسية", "country", "البلد"]
+        },
+        dateOfExpiry: {
+          pattern: /\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\b|\b(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})\b/g,
+          processor: (match: string) => this.normalizeDateFormat(match),
+          confidence: 0.9,
+          contextKeywords: ["expiry", "valid until", "انتهاء", "صلاحية"]
+        }
+      };
+    }
+
+    // Default patterns for any other document types
     return {
       documentNumber: {
         pattern: /\b\d{8,15}\b|\b[A-Z]{2}\d{8,12}\b/g,
@@ -950,6 +902,32 @@ export class DocumentExtractor {
               documentNumber: { x: 0.1, y: 0.1, w: 0.8, h: 0.1 },
               fullNameArabic: { x: 0.1, y: 0.3, w: 0.8, h: 0.1 },
               fullNameLatin: { x: 0.1, y: 0.5, w: 0.8, h: 0.1 }
+            }
+          };
+          break;
+        case "passport":
+          templateData = {
+            docType: "passport",
+            size: { w: 860, h: 540 },
+            fields: {
+              documentNumber: { x: 0.1, y: 0.1, w: 0.8, h: 0.1 },
+              surname: { x: 0.1, y: 0.2, w: 0.8, h: 0.1 },
+              givenNames: { x: 0.1, y: 0.3, w: 0.8, h: 0.1 },
+              dateOfBirth: { x: 0.1, y: 0.4, w: 0.4, h: 0.1 },
+              nationality: { x: 0.5, y: 0.4, w: 0.4, h: 0.1 },
+              dateOfExpiry: { x: 0.1, y: 0.5, w: 0.4, h: 0.1 }
+            }
+          };
+          break;
+        case "residence_permit":
+          templateData = {
+            docType: "residence_permit",
+            size: { w: 860, h: 540 },
+            fields: {
+              documentNumber: { x: 0.1, y: 0.1, w: 0.8, h: 0.1 },
+              fullNameArabic: { x: 0.1, y: 0.2, w: 0.8, h: 0.1 },
+              nationality: { x: 0.1, y: 0.3, w: 0.4, h: 0.1 },
+              dateOfExpiry: { x: 0.5, y: 0.3, w: 0.4, h: 0.1 }
             }
           };
           break;

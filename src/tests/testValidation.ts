@@ -3,8 +3,7 @@
  * This provides testing utilities and validation methods
  */
 
-import { MRZScanner, PassportMRZData } from '../utils/mrzScanner';
-import { DocumentExtractor } from '../core/DocumentExtractor';
+import { DocumentExtractor } from "../core/DocumentExtractor";
 
 export interface TestResult {
   success: boolean;
@@ -28,146 +27,6 @@ export interface TestCase {
  * Test validation utilities for the document extraction system
  */
 export class TestValidation {
-  
-  /**
-   * Create a comprehensive test suite for MRZ scanning
-   */
-  static createMRZTestSuite(): TestSuite {
-    return {
-      name: "MRZ Scanner Tests",
-      tests: [
-        {
-          name: "MRZ Character Correction",
-          description: "Test OCR character correction for common artifacts",
-          testFunction: async () => {
-            const startTime = Date.now();
-            try {
-              // Test with common OCR errors
-              const testLines = [
-                "P<LBNEL <HAYEK<<ROY<<<<<<<<<<««<««<<«««««K<<", // Spaces and quotation marks
-                "LR192761 66LBN9805275M25102511001480283<<<«92"  // Spaces and mixed characters
-              ];
-
-              const correctedLines = testLines.map(line => (MRZScanner as any).cleanAndCorrectMRZ(line));
-              
-              // Validate corrections
-              const line1Valid = correctedLines[0].length === 44 && correctedLines[0].startsWith('P<LBN');
-              const line2Valid = correctedLines[1].length === 44 && !correctedLines[1].includes(' ');
-
-              return {
-                success: line1Valid && line2Valid,
-                message: line1Valid && line2Valid ? "Character correction successful" : "Character correction failed",
-                details: {
-                  original: testLines,
-                  corrected: correctedLines,
-                  line1Valid,
-                  line2Valid
-                },
-                duration: Date.now() - startTime
-              };
-            } catch (error) {
-              return {
-                success: false,
-                message: `Character correction test failed: ${error}`,
-                duration: Date.now() - startTime
-              };
-            }
-          }
-        },
-        {
-          name: "MRZ Parsing Validation",
-          description: "Test MRZ parsing with known good data",
-          testFunction: async () => {
-            const startTime = Date.now();
-            try {
-              const testMRZ = [
-                "P<LBNELHAYEK<<ROY<<<<<<<<<<<<<<<<<<<<<<<<<",
-                "LR19276166LBN9805275M2510251100148028392<8"
-              ];
-
-              const result = MRZScanner.parseMRZ(testMRZ);
-              
-              const validations = {
-                hasDocumentType: result.documentType === 'P',
-                hasIssuingCountry: result.issuingCountry === 'LBN',
-                hasLastName: result.lastName?.length > 0,
-                hasFirstName: result.firstName?.length > 0,
-                hasPassportNumber: result.passportNumber?.length > 0,
-                hasNationality: result.nationality?.length > 0,
-                hasDates: result.dateOfBirth?.length > 0 && result.expirationDate?.length > 0
-              };
-
-              const allValid = Object.values(validations).every(v => v === true);
-
-              return {
-                success: allValid,
-                message: allValid ? "MRZ parsing successful" : "MRZ parsing validation failed",
-                details: {
-                  result,
-                  validations
-                },
-                duration: Date.now() - startTime
-              };
-            } catch (error) {
-              return {
-                success: false,
-                message: `MRZ parsing test failed: ${error}`,
-                duration: Date.now() - startTime
-              };
-            }
-          }
-        },
-        {
-          name: "MRZ Detection Scoring",
-          description: "Test MRZ line detection and scoring",
-          testFunction: async () => {
-            const startTime = Date.now();
-            try {
-              // Test MRZ line scoring
-              const testLines = [
-                "P<LBNELHAYEK<<ROY<<<<<<<<<<<<<<<<<<<<<<<<<", // Good MRZ line 1
-                "LR19276166LBN9805275M2510251100148028392<8", // Good MRZ line 2
-                "REPUBLIC OF LEBANON PASSPORT",               // Not MRZ
-                "Some random text here",                      // Not MRZ
-                "123456789"                                   // Not MRZ
-              ];
-
-              const line1Scores = testLines.map(line => (MRZScanner as any).scoreMRZLine1(line));
-              const line2Scores = testLines.map(line => (MRZScanner as any).scoreMRZLine2(line));
-
-              // First line should have high line1 score, low line2 score
-              const line1Valid = line1Scores[0] > 0.8 && line2Scores[0] < 0.3;
-              // Second line should have high line2 score, low line1 score
-              const line2Valid = line2Scores[1] > 0.8 && line1Scores[1] < 0.3;
-              // Non-MRZ lines should have low scores
-              const nonMRZValid = line1Scores.slice(2).every(s => s < 0.3) && 
-                                 line2Scores.slice(2).every(s => s < 0.3);
-
-              return {
-                success: line1Valid && line2Valid && nonMRZValid,
-                message: "MRZ scoring validation completed",
-                details: {
-                  line1Scores,
-                  line2Scores,
-                  line1Valid,
-                  line2Valid,
-                  nonMRZValid
-                },
-                duration: Date.now() - startTime
-              };
-            } catch (error) {
-              return {
-                success: false,
-                message: `MRZ detection scoring test failed: ${error}`,
-                duration: Date.now() - startTime
-              };
-            }
-          }
-        }
-      ]
-    };
-  }
-
   /**
    * Create test suite for OCR document extraction
    */
@@ -185,47 +44,55 @@ export class TestValidation {
                 "REPUBLIC OF LEBANON Civil Identity Card رقم الهوية المدنية",
                 "John Doe 123456789 25/12/1990",
                 "محمد أحمد صالح 15/03/1985 ذكر لبناني",
-                ""  // Empty text
+                "", // Empty text
               ];
 
-              const results = testTexts.map(text => {
-                const lines = text.split('\n').filter(line => line.trim().length > 0);
+              const results = testTexts.map((text) => {
+                const lines = text
+                  .split("\n")
+                  .filter((line) => line.trim().length > 0);
                 return {
                   hasArabic: /[\u0600-\u06FF]/.test(text),
                   hasLatin: /[a-zA-Z]/.test(text),
-                  wordCount: text.split(/\s+/).filter(word => word.length > 0).length,
+                  wordCount: text.split(/\s+/).filter((word) => word.length > 0)
+                    .length,
                   lineCount: lines.length,
-                  textLength: text.length
+                  textLength: text.length,
                 };
               });
 
               // Validate analysis results
               const validations = {
-                mixedLanguageDetected: results[0].hasArabic && results[0].hasLatin,
+                mixedLanguageDetected:
+                  results[0].hasArabic && results[0].hasLatin,
                 latinOnlyDetected: results[1].hasLatin && !results[1].hasArabic,
                 arabicDetected: results[2].hasArabic,
-                emptyTextHandled: results[3].textLength === 0
+                emptyTextHandled: results[3].textLength === 0,
               };
 
-              const allValid = Object.values(validations).every(v => v === true);
+              const allValid = Object.values(validations).every(
+                (v) => v === true
+              );
 
               return {
                 success: allValid,
-                message: allValid ? "Text analysis successful" : "Text analysis failed",
+                message: allValid
+                  ? "Text analysis successful"
+                  : "Text analysis failed",
                 details: {
                   results,
-                  validations
+                  validations,
                 },
-                duration: Date.now() - startTime
+                duration: Date.now() - startTime,
               };
             } catch (error) {
               return {
                 success: false,
                 message: `Text analysis test failed: ${error}`,
-                duration: Date.now() - startTime
+                duration: Date.now() - startTime,
               };
             }
-          }
+          },
         },
         {
           name: "Field Pattern Matching",
@@ -251,39 +118,51 @@ export class TestValidation {
 
               // Test document number extraction
               const docNumberMatch = testText.match(/\b\d{8,15}\b/);
-              const dateMatches = Array.from(testText.matchAll(/\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\b/g));
-              const arabicTextMatch = testText.match(/[\u0600-\u06FF][\u0600-\u06FF\s]{4,50}/g);
-              const latinNameMatch = testText.match(/\b[A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b/g);
+              const dateMatches = Array.from(
+                testText.matchAll(
+                  /\b(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\b/g
+                )
+              );
+              const arabicTextMatch = testText.match(
+                /[\u0600-\u06FF][\u0600-\u06FF\s]{4,50}/g
+              );
+              const latinNameMatch = testText.match(
+                /\b[A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b/g
+              );
 
               const validations = {
                 documentNumberFound: docNumberMatch !== null,
                 datesFound: dateMatches.length >= 2,
                 arabicTextFound: arabicTextMatch !== null,
-                latinNameFound: latinNameMatch !== null
+                latinNameFound: latinNameMatch !== null,
               };
 
-              const allValid = Object.values(validations).every(v => v === true);
+              const allValid = Object.values(validations).every(
+                (v) => v === true
+              );
 
               return {
                 success: allValid,
-                message: allValid ? "Pattern matching successful" : "Pattern matching failed",
+                message: allValid
+                  ? "Pattern matching successful"
+                  : "Pattern matching failed",
                 details: {
                   docNumber: docNumberMatch?.[0],
-                  dates: dateMatches.map(m => m[0]),
+                  dates: dateMatches.map((m) => m[0]),
                   arabicText: arabicTextMatch?.[0],
                   latinName: latinNameMatch?.[0],
-                  validations
+                  validations,
                 },
-                duration: Date.now() - startTime
+                duration: Date.now() - startTime,
               };
             } catch (error) {
               return {
                 success: false,
                 message: `Pattern matching test failed: ${error}`,
-                duration: Date.now() - startTime
+                duration: Date.now() - startTime,
               };
             }
-          }
+          },
         },
         {
           name: "Date Format Normalization",
@@ -293,44 +172,50 @@ export class TestValidation {
             try {
               // Test various date formats
               const testDates = [
-                "25/12/1990",   // DD/MM/YYYY
-                "03-15-1985",   // MM-DD-YYYY (ambiguous)
-                "1990.12.25",   // YYYY.MM.DD
-                "invalid-date"  // Invalid format
+                "25/12/1990", // DD/MM/YYYY
+                "03-15-1985", // MM-DD-YYYY (ambiguous)
+                "1990.12.25", // YYYY.MM.DD
+                "invalid-date", // Invalid format
               ];
 
-              const normalizedDates = testDates.map(date => 
+              const normalizedDates = testDates.map((date) =>
                 (DocumentExtractor as any).normalizeDateFormat(date)
               );
 
               const validations = {
-                ddmmyyyyNormalized: normalizedDates[0].match(/^\d{4}-\d{2}-\d{2}$/),
-                yyyymmddDetected: normalizedDates[2].match(/^\d{4}-\d{2}-\d{2}$/),
-                invalidHandled: normalizedDates[3] === testDates[3] // Should return original if no pattern matches
+                ddmmyyyyNormalized:
+                  normalizedDates[0].match(/^\d{4}-\d{2}-\d{2}$/),
+                yyyymmddDetected:
+                  normalizedDates[2].match(/^\d{4}-\d{2}-\d{2}$/),
+                invalidHandled: normalizedDates[3] === testDates[3], // Should return original if no pattern matches
               };
 
-              const allValid = Object.values(validations).every(v => v === true || v !== null);
+              const allValid = Object.values(validations).every(
+                (v) => v === true || v !== null
+              );
 
               return {
                 success: allValid,
-                message: allValid ? "Date normalization successful" : "Date normalization failed",
+                message: allValid
+                  ? "Date normalization successful"
+                  : "Date normalization failed",
                 details: {
                   original: testDates,
                   normalized: normalizedDates,
-                  validations
+                  validations,
                 },
-                duration: Date.now() - startTime
+                duration: Date.now() - startTime,
               };
             } catch (error) {
               return {
                 success: false,
                 message: `Date normalization test failed: ${error}`,
-                duration: Date.now() - startTime
+                duration: Date.now() - startTime,
               };
             }
-          }
-        }
-      ]
+          },
+        },
+      ],
     };
   }
 
@@ -342,7 +227,7 @@ export class TestValidation {
     console.log(`📋 Total tests: ${suite.tests.length}`);
 
     const results: TestResult[] = [];
-    
+
     for (let i = 0; i < suite.tests.length; i++) {
       const test = suite.tests[i];
       console.log(`\n📝 Test ${i + 1}/${suite.tests.length}: ${test.name}`);
@@ -365,21 +250,24 @@ export class TestValidation {
         results.push({
           success: false,
           message: `Test execution error: ${error}`,
-          duration: 0
+          duration: 0,
         });
       }
     }
 
     // Summary
-    const passed = results.filter(r => r.success).length;
+    const passed = results.filter((r) => r.success).length;
     const failed = results.length - passed;
-    const avgDuration = results.reduce((sum, r) => sum + r.duration, 0) / results.length;
+    const avgDuration =
+      results.reduce((sum, r) => sum + r.duration, 0) / results.length;
 
     console.log(`\n📊 Test Suite Summary: ${suite.name}`);
     console.log(`✅ Passed: ${passed}/${results.length}`);
     console.log(`❌ Failed: ${failed}/${results.length}`);
     console.log(`⏱️  Average duration: ${avgDuration.toFixed(0)}ms`);
-    console.log(`🎯 Success rate: ${((passed / results.length) * 100).toFixed(1)}%`);
+    console.log(
+      `🎯 Success rate: ${((passed / results.length) * 100).toFixed(1)}%`
+    );
   }
 
   /**
@@ -389,10 +277,7 @@ export class TestValidation {
     console.log(`\n🚀 Starting Comprehensive Test Validation`);
     console.log(`📅 ${new Date().toISOString()}`);
 
-    const suites = [
-      this.createMRZTestSuite(),
-      this.createOCRTestSuite()
-    ];
+    const suites = [this.createOCRTestSuite()];
 
     for (const suite of suites) {
       await this.runTestSuite(suite);
@@ -402,51 +287,38 @@ export class TestValidation {
   }
 
   /**
-   * Validate MRZ data structure
-   */
-  static validateMRZData(data: PassportMRZData): boolean {
-    const required = [
-      'documentType', 'issuingCountry', 'lastName', 'firstName',
-      'passportNumber', 'nationality', 'dateOfBirth', 'sex', 'expirationDate'
-    ];
-
-    return required.every(field => 
-      data[field as keyof PassportMRZData] !== null && 
-      data[field as keyof PassportMRZData] !== undefined &&
-      String(data[field as keyof PassportMRZData]).length > 0
-    );
-  }
-
-  /**
    * Performance benchmark for document extraction
    */
-  static async benchmarkExtraction(imageUri: string, iterations: number = 3): Promise<void> {
+  static async benchmarkExtraction(
+    imageUri: string,
+    iterations: number = 3
+  ): Promise<void> {
     console.log(`\n⚡ Performance Benchmark: ${iterations} iterations`);
-    
+
     const times: number[] = [];
-    
+
     for (let i = 0; i < iterations; i++) {
       const startTime = Date.now();
-      
+
       try {
         // This would need an actual image URI to test
         // await DocumentExtractor.captureAndExtract({ docHint: 'passport' });
         console.log(`🔄 Iteration ${i + 1}: Would test with ${imageUri}`);
-        
+
         const duration = Date.now() - startTime;
         times.push(duration);
-        
+
         console.log(`⏱️  Iteration ${i + 1}: ${duration}ms`);
       } catch (error) {
         console.log(`❌ Iteration ${i + 1} failed:`, error);
       }
     }
-    
+
     if (times.length > 0) {
       const avg = times.reduce((sum, time) => sum + time, 0) / times.length;
       const min = Math.min(...times);
       const max = Math.max(...times);
-      
+
       console.log(`📊 Performance Summary:`);
       console.log(`   Average: ${avg.toFixed(0)}ms`);
       console.log(`   Min: ${min}ms`);

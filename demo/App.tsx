@@ -47,31 +47,26 @@ export default function App() {
         docHint: documentType,
         enableQualityCheck: true,
       });
-      console.log("result", result);
-      // const result = await captureDocument(documentType, {
-      //   output: "uri",
-      //   quality: 0.8,
-      //   maxWidth: 1920,
-      //   maxHeight: 1080,
-      //   strings: getLanguageStrings(),
-      //   onSuccess: (captureResult) => {
-      //     console.log("Document captured successfully:", captureResult);
-      //     setResults((prev) => [
-      //       ...prev,
-      //       {
-      //         type: "document",
-      //         data: captureResult,
-      //         timestamp: new Date().toISOString(),
-      //       },
-      //     ]);
-      //   },
-      //   onCancel: () => {
-      //     console.log("Document capture cancelled");
-      //   },
-      //   onError: (error) => {
-      //     Alert.alert("Error", error.message);
-      //   },
-      // });
+      
+      console.log("Document captured and extracted:", result);
+      
+      // Add the result to the results list for display
+      setResults((prev) => [
+        ...prev,
+        {
+          type: "document",
+          data: {
+            type: documentType,
+            images: [result.processedImageUri],
+            capturedAt: new Date().toISOString(),
+            metadata: {
+              extractedFields: Object.keys(result.fields).length,
+              quality: result.quality
+            }
+          } as DocumentCaptureResult,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
     } catch (error) {
       Alert.alert(
         "Error",
@@ -82,13 +77,13 @@ export default function App() {
 
   const handleSelfieCapture = async () => {
     try {
-      const result = await captureSelfie({
+      await captureSelfie({
         output: "uri",
         quality: 0.8,
         maxWidth: 1920,
         maxHeight: 1080,
         strings: getLanguageStrings(),
-        onSuccess: (captureResult) => {
+        onSuccess: (captureResult: SelfieCaptureResult) => {
           console.log("Selfie captured successfully:", captureResult);
           setResults((prev) => [
             ...prev,
@@ -102,7 +97,7 @@ export default function App() {
         onCancel: () => {
           console.log("Selfie capture cancelled");
         },
-        onError: (error) => {
+        onError: (error: Error) => {
           Alert.alert("Error", error.message);
         },
       });
