@@ -22,6 +22,12 @@ export { frenchStrings } from "./localization/languages/french";
 export { FlowRules } from "./utils/flowRules";
 export { ImageProcessor } from "./utils/imageProcessor";
 
+// Custom capture exports for host app integration
+export { CameraManager, default as GlobalCameraManager } from "./core/CameraManager";
+export { default as CustomCameraView } from "./components/CustomCameraView";
+export { CustomDocumentCapture } from "./core/CustomDocumentCapture";
+export type { CustomCaptureOptions, CustomCaptureResult } from "./core/CustomDocumentCapture";
+
 export type {
   DocumentType,
   DocumentSide,

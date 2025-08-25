@@ -7,18 +7,19 @@ import {
   ScrollView,
   Alert,
   SafeAreaView,
+  Switch,
 } from "react-native";
 import {
   IdentityCaptureProvider,
-  captureDocument,
-  captureSelfie,
   captureAndExtract,
   DocumentCaptureResult,
   SelfieCaptureResult,
   DocumentType,
   arabicStrings,
   frenchStrings,
+  CameraManager,
 } from "expo-identity-capture";
+
 
 interface CaptureResult {
   type: "document" | "selfie";
@@ -29,6 +30,9 @@ interface CaptureResult {
 export default function App() {
   const [results, setResults] = useState<CaptureResult[]>([]);
   const [language, setLanguage] = useState<"en" | "ar" | "fr">("en");
+  const [useCustomCapture, setUseCustomCapture] = useState(false);
+  const [showCustomCamera, setShowCustomCamera] = useState(false);
+  const [pendingDocType, setPendingDocType] = useState<DocumentType | null>(null);
 
   const getLanguageStrings = () => {
     switch (language) {
@@ -43,13 +47,27 @@ export default function App() {
 
   const handleDocumentCapture = async (documentType: DocumentType) => {
     try {
+      console.log('📱 Document capture triggered:', { documentType, useCustomCapture });
+      
+      // If using custom capture, show the custom camera view
+      if (useCustomCapture) {
+        console.log('📷 Opening custom camera modal... (DocumentScanner will NOT be called)');
+        setPendingDocType(documentType);
+        setShowCustomCamera(true);
+        return;
+      }
+      
+      console.log('📄 Using regular document scanner plugin...');
+
+      // Regular capture with document scanner plugin
       const result = await captureAndExtract({
         docHint: documentType,
         enableQualityCheck: true,
+        useCustomCapture: false,
       });
-      
+
       console.log("Document captured and extracted:", result);
-      
+
       // Add the result to the results list for display
       setResults((prev) => [
         ...prev,
@@ -61,8 +79,8 @@ export default function App() {
             capturedAt: new Date().toISOString(),
             metadata: {
               extractedFields: Object.keys(result.fields).length,
-              quality: result.quality
-            }
+              quality: result.quality,
+            },
           } as DocumentCaptureResult,
           timestamp: new Date().toISOString(),
         },
@@ -75,36 +93,95 @@ export default function App() {
     }
   };
 
+  const handleCustomCameraCapture = async (imageUri: string) => {
+    console.log("📸 Custom camera captured:", imageUri);
+    setShowCustomCamera(false);
+    
+    if (pendingDocType) {
+      try {
+        console.log("🎉 Real photo captured! Custom capture complete.");
+        
+        // Since we have the real captured image from custom camera,
+        // we don't need to call DocumentScanner.scanDocument again
+        // Just add the result to show the custom capture worked
+        setResults((prev) => [
+          ...prev,
+          {
+            type: "document",
+            data: {
+              type: pendingDocType,
+              images: [imageUri], // Use the real captured image
+              capturedAt: new Date().toISOString(),
+              metadata: {
+                extractedFields: 0, // Custom capture complete - would need OCR processing for field extraction
+                quality: { blurScore: 0, brightness: 0, glareDetected: false },
+              },
+            } as DocumentCaptureResult,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+        
+        Alert.alert("Success", `Document captured with custom camera!\n\nPhoto saved: ${pendingDocType.toUpperCase()}\n\nCustom capture with Cancel + Flash only controls completed successfully.`);
+        
+      } catch (error) {
+        Alert.alert("Error", error instanceof Error ? error.message : "Failed to process document");
+      }
+    }
+    
+    setPendingDocType(null);
+  };
+
+  const handleCustomCameraCancel = () => {
+    console.log("Custom camera cancelled");
+    setShowCustomCamera(false);
+    setPendingDocType(null);
+  };
+
   const handleSelfieCapture = async () => {
     try {
-      await captureSelfie({
-        output: "uri",
-        quality: 0.8,
-        maxWidth: 1920,
-        maxHeight: 1080,
-        strings: getLanguageStrings(),
-        onSuccess: (captureResult: SelfieCaptureResult) => {
-          console.log("Selfie captured successfully:", captureResult);
-          setResults((prev) => [
-            ...prev,
-            {
-              type: "selfie",
-              data: captureResult,
-              timestamp: new Date().toISOString(),
-            },
-          ]);
-        },
-        onCancel: () => {
-          console.log("Selfie capture cancelled");
-        },
-        onError: (error: Error) => {
-          Alert.alert("Error", error.message);
-        },
+      console.log("Selfie capture initiated");
+      
+      // Use expo-image-picker for selfie capture since it's simpler for selfies
+      const { ImagePicker } = require('expo-image-picker');
+      
+      // Request permissions
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert("Permission Required", "Camera permission is required to take selfies");
+        return;
+      }
+      
+      // Launch camera
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        aspect: [1, 1],
+        quality: 1,
       });
+      
+      if (!result.cancelled && result.assets && result.assets.length > 0) {
+        const selfieResult: SelfieCaptureResult = {
+          image: result.assets[0].uri,
+          capturedAt: new Date().toISOString(),
+        };
+        
+        console.log("Selfie captured successfully:", selfieResult);
+        setResults((prev) => [
+          ...prev,
+          {
+            type: "selfie",
+            data: selfieResult,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+        
+        Alert.alert("Success", "Selfie captured!");
+      }
+      
     } catch (error) {
       Alert.alert(
         "Error",
-        error instanceof Error ? error.message : "Unknown error"
+        error instanceof Error ? error.message : "Failed to capture selfie"
       );
     }
   };
@@ -144,6 +221,22 @@ export default function App() {
               ))}
             </View>
           </View>
+
+          {/* Custom Capture Toggle */}
+          <View style={styles.toggleContainer}>
+            <Text style={styles.toggleLabel}>Use Custom OpenCV Capture:</Text>
+            <Switch
+              value={useCustomCapture}
+              onValueChange={setUseCustomCapture}
+              trackColor={{ false: "#767577", true: "#81b0ff" }}
+              thumbColor={useCustomCapture ? "#007AFF" : "#f4f3f4"}
+            />
+          </View>
+          {useCustomCapture && (
+            <Text style={styles.toggleInfo}>
+              ℹ️ Custom camera with real photo capture • Cancel + Flash only • Manual capture
+            </Text>
+          )}
 
           {/* Document Capture Buttons */}
           <View style={styles.section}>
@@ -233,6 +326,14 @@ export default function App() {
             )}
           </View>
         </ScrollView>
+
+        {/* Custom Camera Modal */}
+        <CameraManager
+          visible={showCustomCamera}
+          docType={pendingDocType || "passport"}
+          onCapture={handleCustomCameraCapture}
+          onCancel={handleCustomCameraCancel}
+        />
       </SafeAreaView>
     </IdentityCaptureProvider>
   );
@@ -285,6 +386,25 @@ const styles = StyleSheet.create({
   },
   activeLanguageButtonText: {
     color: "white",
+  },
+  toggleContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+    paddingHorizontal: 5,
+  },
+  toggleLabel: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#333",
+  },
+  toggleInfo: {
+    fontSize: 12,
+    color: "#666",
+    fontStyle: "italic",
+    marginBottom: 20,
+    paddingHorizontal: 5,
   },
   button: {
     backgroundColor: "#007AFF",

@@ -63,6 +63,7 @@ export interface CaptureOptions {
   enableQualityCheck?: boolean;
   confidenceThreshold?: number;
   saveProcessedImages?: boolean;
+  useCustomCapture?: boolean; // Enable custom OpenCV-based document capture
 }
 
 export interface QualityMetrics {

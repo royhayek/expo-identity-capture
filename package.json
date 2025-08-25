@@ -59,6 +59,12 @@
   },
   "homepage": "https://github.com/your-username/expo-identity-capture#readme",
   "dependencies": {
-    "stacktrace-parser": "^0.1.11"
+    "react-native-fast-opencv": "^0.4.6",
+    "react-native-reanimated": "^4.0.2",
+    "react-native-worklets": "^0.4.1",
+    "react-native-worklets-core": "^1.6.2",
+    "semver": "^7.7.2",
+    "stacktrace-parser": "^0.1.11",
+    "vision-camera-resize-plugin": "^3.2.0"
   }
 }
