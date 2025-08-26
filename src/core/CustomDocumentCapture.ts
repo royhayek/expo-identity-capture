@@ -106,7 +106,7 @@ export class CustomDocumentCapture {
     try {
       // Use the global camera manager to show the camera
       const cameraManager = GlobalCameraManager.getInstance();
-      const result = await cameraManager.showCamera(options.docHint);
+      const result = await cameraManager.showCamera(options.docHint, undefined, options.enableFlash);
       
       if (result.cancelled) {
         console.log('❌ Camera capture cancelled by user');

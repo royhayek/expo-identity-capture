@@ -763,7 +763,9 @@ function getExpectedAspectRatio(docType: VerifiedDocType): number {
     case 'civil_id':
     case 'army_card':
     case 'residence_permit':
-      return 1.6; // Horizontal rectangle (width/height > 1)
+      return 1.586; // Standard ID card aspect ratio based on Lebanese civil ID reference
+    case 'civil_register':
+      return 1.0; // Square shape
     default:
       return 1.6;
   }
@@ -782,8 +784,11 @@ function validateDocumentShape(aspectRatio: number, docType: VerifiedDocType): b
     case 'civil_id':
     case 'army_card':
     case 'residence_permit':
-      // Other documents should be horizontal (aspect ratio > 1)
-      return aspectRatio >= 1.2 && aspectRatio <= 2.0;
+      // ID cards should have standard credit card proportions (1.586:1 ±15%)
+      return aspectRatio >= 1.35 && aspectRatio <= 1.85;
+    case 'civil_register':
+      // Civil register should be square (1:1 ±15%)
+      return aspectRatio >= 0.85 && aspectRatio <= 1.15;
     default:
       return false;
   }

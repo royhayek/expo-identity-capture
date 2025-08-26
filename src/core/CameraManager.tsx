@@ -8,6 +8,8 @@ interface CameraManagerProps {
   docType: VerifiedDocType;
   onCapture: (imageUri: string) => void;
   onCancel: () => void;
+  disableDetection?: boolean;
+  enableFlash?: boolean;
 }
 
 /**
@@ -19,6 +21,8 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
   docType,
   onCapture,
   onCancel,
+  disableDetection = false,
+  enableFlash = true,
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(visible);
 
@@ -52,6 +56,8 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
         docType={docType}
         onCapture={handleCapture}
         onCancel={handleCancel}
+        disableDetection={disableDetection}
+        enableFlash={enableFlash}
       />
     </Modal>
   );
@@ -77,7 +83,7 @@ class GlobalCameraManager {
    * Show camera and wait for result
    * This is handled by the CameraManager React component
    */
-  public async showCamera(docType: VerifiedDocType): Promise<{ imageUri: string; cancelled: boolean }> {
+  public async showCamera(docType: VerifiedDocType, disableDetection?: boolean, enableFlash?: boolean): Promise<{ imageUri: string; cancelled: boolean }> {
     return new Promise((resolve, reject) => {
       this.captureResolver = resolve;
       this.captureRejecter = reject;

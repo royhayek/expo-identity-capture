@@ -1,4 +1,4 @@
-export type VerifiedDocType = 'passport' | 'residence_permit' | 'civil_id' | 'army_card';
+export type VerifiedDocType = 'passport' | 'residence_permit' | 'civil_id' | 'army_card' | 'civil_register';
 
 export interface OcrField {
   value: string | null;
@@ -64,6 +64,7 @@ export interface CaptureOptions {
   confidenceThreshold?: number;
   saveProcessedImages?: boolean;
   useCustomCapture?: boolean; // Enable custom OpenCV-based document capture
+  enableFlash?: boolean; // Show flash toggle button in custom camera
 }
 
 export interface QualityMetrics {

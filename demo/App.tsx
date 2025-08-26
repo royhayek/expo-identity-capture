@@ -14,11 +14,11 @@ import {
   captureAndExtract,
   DocumentCaptureResult,
   SelfieCaptureResult,
-  DocumentType,
   arabicStrings,
   frenchStrings,
   CameraManager,
 } from "expo-identity-capture";
+import type { VerifiedDocType } from "expo-identity-capture";
 
 
 interface CaptureResult {
@@ -31,8 +31,10 @@ export default function App() {
   const [results, setResults] = useState<CaptureResult[]>([]);
   const [language, setLanguage] = useState<"en" | "ar" | "fr">("en");
   const [useCustomCapture, setUseCustomCapture] = useState(true);
+  const [disableDetection, setDisableDetection] = useState(false);
+  const [enableFlash, setEnableFlash] = useState(true);
   const [showCustomCamera, setShowCustomCamera] = useState(false);
-  const [pendingDocType, setPendingDocType] = useState<DocumentType | null>(null);
+  const [pendingDocType, setPendingDocType] = useState<VerifiedDocType | null>(null);
 
   const getLanguageStrings = () => {
     switch (language) {
@@ -45,7 +47,7 @@ export default function App() {
     }
   };
 
-  const handleDocumentCapture = async (documentType: DocumentType) => {
+  const handleDocumentCapture = async (documentType: VerifiedDocType) => {
     try {
       console.log('📱 Document capture triggered:', { documentType, useCustomCapture });
       
@@ -64,6 +66,7 @@ export default function App() {
         docHint: documentType,
         enableQualityCheck: true,
         useCustomCapture: false,
+        enableFlash: enableFlash,
       });
 
       console.log("Document captured and extracted:", result);
@@ -74,7 +77,7 @@ export default function App() {
         {
           type: "document",
           data: {
-            type: documentType,
+            type: documentType as any,
             images: [result.processedImageUri],
             capturedAt: new Date().toISOString(),
             metadata: {
@@ -109,7 +112,7 @@ export default function App() {
           {
             type: "document",
             data: {
-              type: pendingDocType,
+              type: pendingDocType as any,
               images: [imageUri], // Use the real captured image
               capturedAt: new Date().toISOString(),
               metadata: {
@@ -238,6 +241,42 @@ export default function App() {
             </Text>
           )}
 
+          {/* Disable Detection Toggle - only show when custom capture is enabled */}
+          {useCustomCapture && (
+            <View style={styles.toggleContainer}>
+              <Text style={styles.toggleLabel}>Disable Document Detection:</Text>
+              <Switch
+                value={disableDetection}
+                onValueChange={setDisableDetection}
+                trackColor={{ false: "#767577", true: "#81b0ff" }}
+                thumbColor={disableDetection ? "#007AFF" : "#f4f3f4"}
+              />
+            </View>
+          )}
+          {useCustomCapture && disableDetection && (
+            <Text style={styles.toggleInfo}>
+              ℹ️ Detection disabled - simple photo capture without positioning guides
+            </Text>
+          )}
+
+          {/* Enable Flash Toggle - only show when custom capture is enabled */}
+          {useCustomCapture && (
+            <View style={styles.toggleContainer}>
+              <Text style={styles.toggleLabel}>Enable Flash Button:</Text>
+              <Switch
+                value={enableFlash}
+                onValueChange={setEnableFlash}
+                trackColor={{ false: "#767577", true: "#81b0ff" }}
+                thumbColor={enableFlash ? "#007AFF" : "#f4f3f4"}
+              />
+            </View>
+          )}
+          {useCustomCapture && !enableFlash && (
+            <Text style={styles.toggleInfo}>
+              ℹ️ Flash button disabled - camera will use auto lighting only
+            </Text>
+          )}
+
           {/* Document Capture Buttons */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Document Capture</Text>
@@ -268,6 +307,13 @@ export default function App() {
               onPress={() => handleDocumentCapture("residence_permit")}
             >
               <Text style={styles.buttonText}>🏠 Capture Residence Permit</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.button}
+              onPress={() => handleDocumentCapture("civil_register")}
+            >
+              <Text style={styles.buttonText}>📋 Capture Civil Register</Text>
             </TouchableOpacity>
           </View>
 
@@ -333,6 +379,8 @@ export default function App() {
           docType={pendingDocType || "passport"}
           onCapture={handleCustomCameraCapture}
           onCancel={handleCustomCameraCancel}
+          disableDetection={disableDetection}
+          enableFlash={enableFlash}
         />
       </SafeAreaView>
     </IdentityCaptureProvider>

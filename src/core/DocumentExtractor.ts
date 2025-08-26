@@ -109,7 +109,7 @@ export class DocumentExtractor {
       const customCapture = CustomDocumentCapture.getInstance();
       const captureResult = await customCapture.captureDocument({
         docHint: options.docHint,
-        enableFlash: false,
+        enableFlash: options.enableFlash,
         quality: 100,
         maxRetries: 3,
       });
