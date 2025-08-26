@@ -30,7 +30,7 @@ interface CaptureResult {
 export default function App() {
   const [results, setResults] = useState<CaptureResult[]>([]);
   const [language, setLanguage] = useState<"en" | "ar" | "fr">("en");
-  const [useCustomCapture, setUseCustomCapture] = useState(false);
+  const [useCustomCapture, setUseCustomCapture] = useState(true);
   const [showCustomCamera, setShowCustomCamera] = useState(false);
   const [pendingDocType, setPendingDocType] = useState<DocumentType | null>(null);
 

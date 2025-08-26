@@ -1,13 +1,10 @@
 /**
  * OpenCV Document Detection Module
  * Handles real-time document detection, edge detection, and perspective correction
- * using react-native-fast-opencv
+ * This module serves as a bridge to OpenCV functionality when available
  */
 
 import { VerifiedDocType } from "../types/extraction";
-
-// TODO: Import when dependencies are added
-// import { Mat, OpenCV } from 'react-native-fast-opencv';
 
 export interface DetectedDocument {
   corners: { x: number; y: number }[];
@@ -32,56 +29,26 @@ export class OpenCVDocumentDetection {
 
   /**
    * Process camera frame for real-time document detection
+   * Note: This will use native OpenCV when react-native-fast-opencv is properly configured
+   * Currently falls back to JS implementation in DocumentDetectionProcessor
    */
   static async processFrame(imageBuffer: ArrayBuffer, docType: VerifiedDocType): Promise<DetectedDocument | null> {
     try {
       const startTime = Date.now();
       
-      // TODO: Implement with react-native-fast-opencv
-      // 1. Convert buffer to OpenCV Mat
-      // const mat = OpenCV.matFromBuffer(imageBuffer);
+      // TODO: Integrate with react-native-fast-opencv when native module is configured
+      // The JS implementation in DocumentDetectionProcessor provides real edge detection
       
-      // 2. Convert to grayscale
-      // const grayMat = new Mat();
-      // OpenCV.cvtColor(mat, grayMat, OpenCV.COLOR_RGBA2GRAY);
-      
-      // 3. Apply Gaussian blur
-      // const blurredMat = new Mat();
-      // OpenCV.GaussianBlur(grayMat, blurredMat, { width: 5, height: 5 }, 0);
-      
-      // 4. Apply Canny edge detection
-      // const cannyMat = new Mat();
-      // OpenCV.Canny(blurredMat, cannyMat, this.CANNY_THRESHOLD_1, this.CANNY_THRESHOLD_2);
-      
-      // 5. Find contours
-      // const contours = new OpenCV.MatVector();
-      // const hierarchy = new Mat();
-      // OpenCV.findContours(cannyMat, contours, hierarchy, OpenCV.RETR_LIST, OpenCV.CHAIN_APPROX_SIMPLE);
-      
-      // 6. Process contours to find document
-      // const detectedDoc = this.findLargestDocumentContour(contours, docType);
-      
-      // Mock implementation for now
-      const mockDetection: DetectedDocument = {
-        corners: [
-          { x: 100, y: 200 },
-          { x: 500, y: 200 },
-          { x: 500, y: 600 },
-          { x: 100, y: 600 }
-        ],
-        confidence: 0.85,
-        area: 120000,
-        aspectRatio: docType === 'passport' ? 0.67 : 1.6,
-        isValidShape: true
-      };
-
       const processingTime = Date.now() - startTime;
-      console.log(`📊 Frame processed in ${processingTime}ms`);
+      if (processingTime > 0) {
+        console.log(`📊 OpenCV bridge checked in ${processingTime}ms`);
+      }
 
-      return mockDetection;
+      // Return null to use the JS implementation
+      return null;
 
     } catch (error) {
-      console.error('❌ Frame processing failed:', error);
+      console.error('❌ OpenCV processing failed:', error);
       return null;
     }
   }
@@ -98,43 +65,15 @@ export class OpenCVDocumentDetection {
       const startTime = Date.now();
       console.log(`🔬 Applying perspective correction for ${docType}...`);
 
-      // TODO: Implement with react-native-fast-opencv
-      // 1. Load image as OpenCV Mat
-      // const srcMat = await OpenCV.matFromUri(imageUri);
-      
-      // 2. Define source points (detected corners)
-      // const srcPoints = OpenCV.matFromArray(4, 1, OpenCV.CV_32FC2, [
-      //   corners[0].x, corners[0].y,
-      //   corners[1].x, corners[1].y,
-      //   corners[2].x, corners[2].y,
-      //   corners[3].x, corners[3].y
-      // ]);
-      
-      // 3. Calculate target dimensions based on document type
+      // Calculate target dimensions based on document type
       const targetDimensions = this.getTargetDimensions(corners, docType);
-      
-      // 4. Define destination points
-      // const dstPoints = OpenCV.matFromArray(4, 1, OpenCV.CV_32FC2, [
-      //   0, 0,
-      //   targetDimensions.width, 0,
-      //   targetDimensions.width, targetDimensions.height,
-      //   0, targetDimensions.height
-      // ]);
-      
-      // 5. Calculate perspective transform matrix
-      // const transformMatrix = OpenCV.getPerspectiveTransform(srcPoints, dstPoints);
-      
-      // 6. Apply perspective correction
-      // const correctedMat = new Mat();
-      // OpenCV.warpPerspective(srcMat, correctedMat, transformMatrix, targetDimensions);
-      
-      // 7. Save corrected image
-      // const outputUri = await OpenCV.matToUri(correctedMat);
 
-      // Mock implementation
-      const mockResult: ProcessingResult = {
+      // TODO: Implement actual perspective correction with OpenCV
+      // For now, return the original image with detection metadata
+      
+      const result: ProcessingResult = {
         originalImageUri: imageUri,
-        processedImageUri: imageUri, // Would be the corrected image
+        processedImageUri: imageUri, // Will be corrected image when OpenCV is integrated
         detectedDocument: {
           corners,
           confidence: 0.9,
@@ -145,27 +84,13 @@ export class OpenCVDocumentDetection {
         processingTime: Date.now() - startTime
       };
 
-      console.log(`✅ Perspective correction completed in ${mockResult.processingTime}ms`);
-      return mockResult;
+      console.log(`✅ Perspective correction metadata prepared in ${result.processingTime}ms`);
+      return result;
 
     } catch (error) {
       console.error('❌ Perspective correction failed:', error);
       throw new Error(`Failed to apply perspective correction: ${error.message}`);
     }
-  }
-
-  /**
-   * Find the largest valid document contour from detected contours
-   */
-  private static findLargestDocumentContour(contours: any, docType: VerifiedDocType): DetectedDocument | null {
-    // TODO: Implement contour analysis
-    // 1. Filter contours by area (> MIN_CONTOUR_AREA)
-    // 2. Approximate polygonal curves
-    // 3. Find 4-sided polygons (rectangles)
-    // 4. Validate aspect ratio based on document type
-    // 5. Return the largest valid contour
-    
-    return null;
   }
 
   /**
@@ -248,25 +173,6 @@ export class OpenCVDocumentDetection {
     } else {
       // Other documents: expect horizontal rectangle (aspect ratio > 1.0)
       return aspectRatio >= 1.2 && aspectRatio <= 2.0;
-    }
-  }
-
-  /**
-   * Enhanced edge detection with adaptive thresholding
-   */
-  static async enhancedEdgeDetection(imageBuffer: ArrayBuffer): Promise<any> {
-    try {
-      // TODO: Implement advanced edge detection
-      // 1. Apply adaptive thresholding
-      // 2. Use morphological operations to clean up edges
-      // 3. Apply dilate/erode to connect broken edges
-      // 4. Use HoughLines for line detection as backup
-      
-      console.log('🔍 Performing enhanced edge detection...');
-      return null;
-    } catch (error) {
-      console.error('❌ Enhanced edge detection failed:', error);
-      return null;
     }
   }
 }

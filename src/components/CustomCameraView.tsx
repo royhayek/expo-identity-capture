@@ -11,13 +11,14 @@ import { VerifiedDocType } from '../types/extraction';
 import { Camera, useCameraDevice, useCameraPermission, useFrameProcessor } from 'react-native-vision-camera';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
 import { useRunOnJS } from 'react-native-worklets-core';
+import { areCornersStable } from '../utils/DocumentDetectionProcessor';
+import TextRecognition from '@react-native-ml-kit/text-recognition';
 
 interface CustomCameraViewProps {
   docType: VerifiedDocType;
   onCapture: (imageUri: string) => void;
   onCancel: () => void;
 }
-
 
 export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   docType,
@@ -30,7 +31,7 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   const [isDocumentDetected, setIsDocumentDetected] = useState(false);
   const [detectedCorners, setDetectedCorners] = useState<any>(null);
   const [detectionConfidence, setDetectionConfidence] = useState(0);
-  const [stableFrameCount, setStableFrameCount] = useState(0);
+  // Removed stableFrameCount state - now using confidence-based detection
   
   // Camera setup
   const device = useCameraDevice('back');
@@ -38,93 +39,318 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   const cameraRef = useRef<Camera>(null);
   const resizePlugin = useResizePlugin();
   
+  // Previous detection state for stability checking
+  const previousCornersRef = useRef<any>(null);
+  const stableDetectionCountRef = useRef(0);
+  const frameCountRef = useRef(0);
+  // Smart OCR management - trigger during stable detection for real-time validation
+  const ocrValidationRef = useRef<{
+    inProgress: boolean;
+    lastValidationTime: number;
+    lastValidationResult: boolean | null;
+    stableDetectionCount: number;
+    needsValidation: boolean;
+    hasConfirmedDetection: boolean; // NEW: Track if OCR has confirmed detection
+  }>({
+    inProgress: false,
+    lastValidationTime: 0,
+    lastValidationResult: null,
+    stableDetectionCount: 0,
+    needsValidation: false,
+    hasConfirmedDetection: false
+  });
+  
   // Update detection state function
   const updateDetection = useCallback((detection: any) => {
     setIsDocumentDetected(detection.isDetected);
     setDetectedCorners(detection.corners);
     setDetectionConfidence(detection.confidence);
-    
-    // Simple stability tracking - count consecutive detections
-    if (detection.isDetected) {
-      setStableFrameCount(prev => Math.min(prev + 1, 10)); // Cap at 10
-    } else {
-      setStableFrameCount(0);
+  }, []);
+  
+  const runUpdateDetection = useRunOnJS(updateDetection, [updateDetection]);
+  
+  // Document text validation function (declared first so it can be used by other functions)
+  const validateDocumentText = useCallback((ocrResult: any, documentType: VerifiedDocType): boolean => {
+    try {
+      const detectedText = ocrResult?.text?.toLowerCase() || '';
+      
+      if (!detectedText || detectedText.length < 10) {
+        console.log('📝 Insufficient text for validation (need 10+ chars)');
+        return false;
+      }
+      
+      // Skip obvious debug/log text
+      const debugPatterns = [
+        /log\s+/i, /console/i, /debug/i, /error/i, /warning/i,
+        /starting\s+/i, /validation/i, /detected\s+text/i,
+        /analysis/i, /buffer/i, /dimensions/i, /confidence/i
+      ];
+      
+      let debugMatches = 0;
+      debugPatterns.forEach(pattern => {
+        if (pattern.test(detectedText)) debugMatches++;
+      });
+      
+      if (debugMatches >= 2) {
+        console.log('❌ Text appears to be debug output, not document text');
+        return false;
+      }
+      
+      // Document type specific keywords (relaxed for better matching)
+      const documentKeywords: Record<VerifiedDocType, string[]> = {
+        passport: [
+          'passport', 'passeport', 'جواز سفر', 'republic', 'state',
+          'nationality', 'birth', 'sex', 'country', 'document',
+          'given name', 'surname', 'دولة', 'جمهورية'
+        ],
+        civil_id: [
+          'civil', 'identity', 'card', 'national', 'citizen',
+          'بطاقة مدنية', 'هوية', 'republic', 'state', 'الجمهورية',
+          'الكويت', 'kuwait', 'مدني', 'رقم مدني'
+        ],
+        army_card: [
+          'military', 'army', 'armed forces', 'service', 'rank',
+          'القوات المسلحة', 'عسكرية', 'الجيش', 'رتبة', 'عسكري'
+        ],
+        residence_permit: [
+          'residence', 'permit', 'visa', 'stay', 'إقامة',
+          'تصريح إقامة', 'resident', 'immigration', 'work',
+          'هجرة', 'مقيم', 'إذن'
+        ]
+      };
+      
+      // General document indicators
+      const generalIndicators = [
+        'republic', 'state', 'government', 'ministry', 'authority',
+        'number', 'date', 'name', 'nationality', 'issued', 'valid',
+        'الجمهورية', 'دولة', 'حكومة', 'وزارة', 'رسمي', 'رقم',
+        'تاريخ', 'اسم', 'جنسية', 'صادر', 'صالح'
+      ];
+      
+      const specificKeywords = documentKeywords[documentType] || [];
+      
+      // Count matches
+      let specificMatches = 0;
+      specificKeywords.forEach(keyword => {
+        if (detectedText.includes(keyword.toLowerCase())) {
+          specificMatches++;
+          console.log(`✅ Found keyword: ${keyword}`);
+        }
+      });
+      
+      let generalMatches = 0;
+      generalIndicators.forEach(indicator => {
+        if (detectedText.includes(indicator.toLowerCase())) {
+          generalMatches++;
+        }
+      });
+      
+      // Relaxed validation criteria for OCR-based detection
+      const hasGeneralIndicators = generalMatches >= 1; // At least 1 general indicator
+      const hasSpecificKeywords = specificMatches >= 1; // At least 1 specific keyword
+      const hasSubstantialText = detectedText.length >= 10; // Reduced to 10 characters minimum
+      
+      const isValid = hasGeneralIndicators && hasSpecificKeywords && hasSubstantialText;
+      
+      console.log(`📋 OCR Validation:`, {
+        general: `${generalMatches}/1+`,
+        specific: `${specificMatches}/1+`, 
+        textLength: `${detectedText.length}/10+`,
+        result: isValid
+      });
+      
+      return isValid;
+      
+    } catch (error) {
+      console.log('❌ Text validation error:', error);
+      return false;
     }
   }, []);
   
-  // Create worklet-safe function for updating detection
-  const runUpdateDetection = useRunOnJS(updateDetection, [updateDetection]);
-
-  // Request permission on mount
-  useEffect(() => {
-    if (!hasPermission) {
-      requestPermission();
+  // OCR-based document detection
+  const performRealtimeOCRValidation = useCallback(async (documentType: VerifiedDocType, currentStableFrames: number): Promise<void> => {
+    if (ocrValidationRef.current.inProgress) {
+      console.log('🔄 OCR validation already in progress - skipping');
+      return;
     }
-  }, [hasPermission, requestPermission]);
 
-  const toggleFlash = useCallback(() => {
-    setIsFlashEnabled(!isFlashEnabled);
-  }, [isFlashEnabled]);
+    const now = Date.now();
+    // Throttle OCR checks - minimum 3 seconds between validations
+    if (now - ocrValidationRef.current.lastValidationTime < 3000) {
+      console.log('⏱️ OCR validation throttled - using cached result');
+      const cachedResult = ocrValidationRef.current.lastValidationResult;
+      if (cachedResult !== null) {
+        console.log(`📋 Using cached OCR result: ${cachedResult}`);
+        setIsDocumentDetected(cachedResult);
+        setDetectionConfidence(cachedResult ? 0.9 : 0.3);
+      }
+      return;
+    }
 
-  // Test frame processor to see if it's working at all
+    console.log('🔍 Starting OCR-based document detection...');
+
+    ocrValidationRef.current.inProgress = true;
+    ocrValidationRef.current.lastValidationTime = now;
+
+    try {
+      // Take a photo for OCR analysis
+      if (!cameraRef.current) {
+        console.log('❌ Camera not available for OCR');
+        setIsDocumentDetected(false);
+        setDetectionConfidence(0);
+        ocrValidationRef.current.lastValidationResult = false;
+        return;
+      }
+
+      const photo = await cameraRef.current.takePhoto({
+        flash: 'off',
+        enableShutterSound: false,
+      });
+      
+      const imagePath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+      
+      // OCR with timeout
+      const ocrPromise = TextRecognition.recognize(imagePath);
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('OCR_TIMEOUT')), 5000)
+      );
+      
+      const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
+      
+      const isValidDocument = validateDocumentText(ocrResult, documentType);
+      
+      console.log('📖 OCR Detection Result:', {
+        isValid: isValidDocument,
+        textLength: ocrResult?.text?.length || 0,
+        blocks: ocrResult?.blocks?.length || 0,
+        sampleText: ocrResult?.text?.substring(0, 50) || 'No text'
+      });
+      
+      // Directly update detection state based on OCR results
+      ocrValidationRef.current.lastValidationResult = isValidDocument;
+      setIsDocumentDetected(isValidDocument);
+      setDetectionConfidence(isValidDocument ? 0.9 : 0.3);
+      
+      if (isValidDocument) {
+        console.log('✅ DOCUMENT DETECTED via OCR - showing green frame');
+      } else {
+        console.log('❌ No valid document detected via OCR');
+      }
+      
+    } catch (error) {
+      console.log('⚠️ OCR detection failed:', error instanceof Error ? error.message : 'Unknown');
+      ocrValidationRef.current.lastValidationResult = false;
+      setIsDocumentDetected(false);
+      setDetectionConfidence(0.1);
+      
+    } finally {
+      ocrValidationRef.current.inProgress = false;
+    }
+  }, [validateDocumentText]);
+
+  // This function is no longer needed - detection is handled directly by OCR
+
+  // Post-capture OCR validation (more thorough)
+  const performOCRValidation = useCallback(async (capturedImagePath: string, documentType: VerifiedDocType) => {
+    if (ocrValidationRef.current.inProgress) {
+      console.log('⏳ OCR validation already in progress');
+      return false;
+    }
+
+    const now = Date.now();
+    // Throttle OCR - minimum 3 seconds between validations
+    if (now - ocrValidationRef.current.lastValidationTime < 3000) {
+      console.log('⏱️ OCR validation throttled');
+      return false;
+    }
+
+    ocrValidationRef.current.inProgress = true;
+    ocrValidationRef.current.lastValidationTime = now;
+
+    try {
+      console.log('📝 Starting OCR validation for captured image...');
+      
+      // Use ML Kit OCR with timeout protection
+      const ocrPromise = TextRecognition.recognize(capturedImagePath);
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('OCR_TIMEOUT')), 8000)
+      );
+      
+      const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
+      
+      console.log('📖 OCR completed - Text length:', ocrResult?.text?.length || 0);
+      console.log('📚 OCR blocks found:', ocrResult?.blocks?.length || 0);
+      
+      // Validate document text
+      const isValidDocument = validateDocumentText(ocrResult, documentType);
+      
+      console.log('🎯 OCR validation result:', {
+        isValidDocument,
+        textLength: ocrResult?.text?.length || 0,
+        blocksCount: ocrResult?.blocks?.length || 0
+      });
+      
+      return isValidDocument;
+      
+    } catch (error) {
+      console.log('❌ OCR validation failed:', error instanceof Error ? error.message : 'Unknown error');
+      
+      // Don't crash on OCR failure - just return false
+      if (error instanceof Error && error.message === 'OCR_TIMEOUT') {
+        console.log('⏰ OCR timed out - continuing without text validation');
+      }
+      
+      return false; // Allow capture even if OCR fails
+      
+    } finally {
+      ocrValidationRef.current.inProgress = false;
+    }
+  }, [validateDocumentText]);
+  
+  const runOCRValidation = useRunOnJS(performOCRValidation, [performOCRValidation]);
+  const runRealtimeOCRValidation = useRunOnJS(performRealtimeOCRValidation, [performRealtimeOCRValidation]);
+  
+  // Enhanced capture function with OCR validation after stable detection
+
+  // Simplified OCR-based document detection frame processor
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
     
     try {
-      console.log(`🎥 Frame processor working! Frame: ${frame.width}x${frame.height}`);
+      // Frame throttling for performance - check every 30 frames (~1 second at 30fps)
+      frameCountRef.current = frameCountRef.current + 1;
+      if (frameCountRef.current % 30 !== 0) return;
       
-      // Simple test - just check frame dimensions and create basic detection
       const frameWidth = frame.width;
       const frameHeight = frame.height;
       
-      // Basic detection without resize plugin - just based on frame properties
-      const hasValidDimensions = frameWidth > 100 && frameHeight > 100;
-      const frameArea = frameWidth * frameHeight;
+      console.log('🔍 OCR-based detection check (every 30 frames)');
       
-      // Simple time-based variation to test if detection works
-      const now = Date.now();
-      const timeVariation = (Math.sin(now / 2000) + 1) / 2; // 0 to 1
-      const shouldDetect = hasValidDimensions && timeVariation > 0.7;
+      // Create default corners for frame overlay
+      const boxTop = frameHeight * 0.2;
+      const boxLeft = frameWidth * 0.1;
+      const boxWidth = frameWidth * 0.8;
+      const boxHeight = frameHeight * 0.5;
       
-      console.log(`📊 Detection test: dimensions=${hasValidDimensions}, area=${frameArea}, timeVar=${timeVariation.toFixed(2)}, detect=${shouldDetect}`);
+      const defaultCorners = {
+        topLeft: { x: boxLeft, y: boxTop },
+        topRight: { x: boxLeft + boxWidth, y: boxTop },
+        bottomLeft: { x: boxLeft, y: boxTop + boxHeight },
+        bottomRight: { x: boxLeft + boxWidth, y: boxTop + boxHeight }
+      };
       
-      if (shouldDetect) {
-        const expectedAspectRatio = docType === 'passport' ? 0.7 : 1.6;
-        const confidence = timeVariation;
-        
-        // Create corners based on frame center
-        const centerX = frameWidth / 2;
-        const centerY = frameHeight / 2;
-        const docWidth = frameWidth * 0.6;
-        const docHeight = docWidth / expectedAspectRatio;
-        
-        const corners = {
-          topLeft: { x: centerX - docWidth/2, y: centerY - docHeight/2 },
-          topRight: { x: centerX + docWidth/2, y: centerY - docHeight/2 },
-          bottomLeft: { x: centerX - docWidth/2, y: centerY + docHeight/2 },
-          bottomRight: { x: centerX + docWidth/2, y: centerY + docHeight/2 },
-        };
-        
-        console.log(`✅ Document detected! Confidence: ${confidence.toFixed(2)}`);
-        
-        runUpdateDetection({
-          isDetected: true,
-          corners,
-          confidence,
-          aspectRatio: expectedAspectRatio,
-          isValidShape: true,
-        });
-      } else {
-        console.log(`❌ No document detected. Time variation: ${timeVariation.toFixed(2)}`);
-        
-        runUpdateDetection({
-          isDetected: false,
-          corners: null,
-          confidence: timeVariation * 0.5,
-          aspectRatio: 0,
-          isValidShape: false,
-        });
-      }
+      // Always update with default state - OCR will determine if document is detected
+      runUpdateDetection({
+        isDetected: false, // OCR will update this if document is found
+        corners: defaultCorners,
+        confidence: 0.5,
+        aspectRatio: 1.0,
+        isValidShape: true,
+      });
+      
+      // Trigger OCR validation to check for document content
+      console.log('🔍 Triggering OCR-based document detection...');
+      runRealtimeOCRValidation(docType, 1); // Always pass stable frame count as 1
       
     } catch (error) {
       console.log('❌ Frame processor error:', error);
@@ -137,110 +363,18 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
       });
     }
   }, [docType]);
+  
+  // Helper functions removed - using simplified edge detection inline
 
-  // Real image analysis function that runs in worklet context
-  const analyzeFrameForDocument = (buffer: Uint8Array, width: number, height: number, documentType: VerifiedDocType) => {
-    'worklet';
-    
-    try {
-      // Calculate brightness and contrast metrics
-      let totalBrightness = 0;
-      let brightPixels = 0;
-      let darkPixels = 0;
-      let mediumPixels = 0;
-      const centerSize = Math.floor(Math.min(width, height) * 0.8); // Increased analysis area
-      const centerX = Math.floor(width / 2);
-      const centerY = Math.floor(height / 2);
-      
-      let validPixelCount = 0;
-      
-      // Analyze center region for document presence
-      for (let y = centerY - centerSize/2; y < centerY + centerSize/2; y++) {
-        for (let x = centerX - centerSize/2; x < centerX + centerSize/2; x++) {
-          if (x >= 0 && x < width && y >= 0 && y < height) {
-            const pixelIndex = (y * width + x) * 3; // RGB format
-            const r = buffer[pixelIndex] || 0;
-            const g = buffer[pixelIndex + 1] || 0;
-            const b = buffer[pixelIndex + 2] || 0;
-            
-            // Calculate brightness
-            const brightness = (r + g + b) / 3;
-            totalBrightness += brightness;
-            validPixelCount++;
-            
-            // More lenient thresholds for detection
-            if (brightness > 150) brightPixels++;      // Lowered from 180
-            else if (brightness < 100) darkPixels++;   // Raised from 80
-            else mediumPixels++;
-          }
-        }
-      }
-      
-      const totalPixels = validPixelCount;
-      const avgBrightness = totalBrightness / totalPixels;
-      const brightRatio = brightPixels / totalPixels;
-      const darkRatio = darkPixels / totalPixels;
-      const mediumRatio = mediumPixels / totalPixels;
-      
-      // Debug logging (will show in console)
-      console.log(`Frame Analysis: bright=${(brightRatio*100).toFixed(1)}%, dark=${(darkRatio*100).toFixed(1)}%, medium=${(mediumRatio*100).toFixed(1)}%, avgBright=${avgBrightness.toFixed(1)}`);
-      
-      // More lenient document detection logic
-      // Documents can have various brightness levels and contrast ratios
-      const hasVariation = (brightRatio > 0.1 || darkRatio > 0.1) && (brightRatio + darkRatio + mediumRatio > 0.8);
-      const hasReasonableBrightness = avgBrightness > 50 && avgBrightness < 250; // Much wider range
-      const hasContrast = Math.abs(brightRatio - darkRatio) > 0.05; // Some contrast difference
-      
-      const isLikelyDocument = hasVariation && hasReasonableBrightness && hasContrast;
-      
-      console.log(`Detection: variation=${hasVariation}, brightness=${hasReasonableBrightness}, contrast=${hasContrast}, result=${isLikelyDocument}`);
-      
-      if (isLikelyDocument) {
-        const expectedAspectRatio = documentType === 'passport' ? 0.7 : 1.6;
-        const confidence = Math.min(0.5 + (brightRatio * 0.3) + (darkRatio * 0.2), 0.95);
-        
-        // Calculate document bounds based on analysis
-        const docWidth = centerSize * 0.9;
-        const docHeight = docWidth / expectedAspectRatio;
-        
-        const corners = {
-          topLeft: { x: centerX - docWidth/2, y: centerY - docHeight/2 },
-          topRight: { x: centerX + docWidth/2, y: centerY - docHeight/2 },
-          bottomLeft: { x: centerX - docWidth/2, y: centerY + docHeight/2 },
-          bottomRight: { x: centerX + docWidth/2, y: centerY + docHeight/2 },
-        };
-        
-        return {
-          isDetected: true,
-          corners,
-          confidence,
-          aspectRatio: expectedAspectRatio,
-          isValidShape: true,
-        };
-      } else {
-        return {
-          isDetected: false,
-          corners: null,
-          confidence: Math.max(brightRatio, darkRatio, mediumRatio) * 0.4,
-          aspectRatio: 0,
-          isValidShape: false,
-        };
-      }
-      
-    } catch (error) {
-      console.log('Analysis error:', error);
-      return {
-        isDetected: false,
-        corners: null,
-        confidence: 0,
-        aspectRatio: 0,
-        isValidShape: false,
-      };
+  useEffect(() => {
+    if (!hasPermission) {
+      requestPermission();
     }
-  };
+  }, [hasPermission, requestPermission]);
 
-  // Manual capture only - no auto-capture
-  // Users must tap the capture button to take photos
+  const toggleFlash = useCallback(() => {
+    setIsFlashEnabled(!isFlashEnabled);
+  }, [isFlashEnabled]);
 
   const handleCapture = useCallback(async () => {
     if (captureInProgress || !cameraRef.current || !isCameraReady) return;
@@ -248,31 +382,57 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     setCaptureInProgress(true);
     
     try {
-      console.log('📸 Taking photo...');
+      console.log('📷 Taking photo for document capture...');
       
       const photo = await cameraRef.current.takePhoto({
         flash: isFlashEnabled ? 'on' : 'off',
-        enableShutterSound: true,
       });
       
-      console.log('✅ Photo captured:', photo.path);
-      onCapture(`file://${photo.path}`);
+      const imagePath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+      console.log('📸 Photo captured successfully:', imagePath);
+      
+      // Perform OCR validation on the captured image (not on frame processing)
+      console.log('🔍 Starting post-capture OCR validation...');
+      const ocrValid = await runOCRValidation(imagePath, docType);
+      
+      if (ocrValid) {
+        console.log('✅ OCR validation passed - document confirmed');
+        onCapture(imagePath);
+      } else {
+        console.log('⚠️ OCR validation failed - still allowing capture');
+        // Still allow capture even if OCR fails (fallback to visual detection)
+        Alert.alert(
+          'Document Captured',
+          'Photo taken successfully. OCR text validation could not confirm document type, but visual detection was successful.',
+          [
+            {
+              text: 'Retake',
+              style: 'cancel'
+            },
+            {
+              text: 'Use This Photo',
+              onPress: () => onCapture(imagePath)
+            }
+          ]
+        );
+      }
       
     } catch (error) {
       console.error('❌ Capture failed:', error);
-      Alert.alert('Capture Error', `Failed to capture image: ${error.message}`);
+      Alert.alert('Capture Failed', 'Could not take photo. Please try again.');
+    } finally {
       setCaptureInProgress(false);
     }
-  }, [captureInProgress, onCapture, isCameraReady, isFlashEnabled]);
+  }, [captureInProgress, onCapture, isCameraReady, isFlashEnabled, docType, runOCRValidation]);
 
   const getDocumentTypeLabel = () => {
-    const labels = {
-      passport: 'Passport',
-      civil_id: 'Civil ID',
-      army_card: 'Army Card',
-      residence_permit: 'Residence Permit',
-    };
-    return labels[docType] || 'Document';
+    switch (docType) {
+      case 'passport': return 'Passport';
+      case 'civil_id': return 'Civil ID';
+      case 'army_card': return 'Army Card';
+      case 'residence_permit': return 'Residence Permit';
+      default: return 'Document';
+    }
   };
 
   const getInstructionText = () => {
@@ -311,7 +471,6 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
       
-      {/* Camera View */}
       <View style={styles.cameraContainer}>
         <Camera
           ref={cameraRef}
@@ -331,15 +490,14 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
           }}
         />
         
-        {/* Document Detection Overlay */}
         <View style={styles.overlayContainer}>
           {detectedCorners && isDocumentDetected ? (
             <View 
               style={[
                 styles.detectionOverlay,
                 {
-                  borderColor: stableFrameCount >= 5 ? '#4CAF50' : '#FF9800',
-                  backgroundColor: stableFrameCount >= 5 ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)'
+                  borderColor: detectionConfidence >= 0.8 ? '#4CAF50' : '#FF9800',
+                  backgroundColor: detectionConfidence >= 0.8 ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)'
                 }
               ]}
             />
@@ -349,7 +507,6 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         </View>
       </View>
 
-      {/* Top Toolbar */}
       <View style={styles.topToolbar}>
         <TouchableOpacity style={styles.toolbarButton} onPress={onCancel}>
           <Text style={styles.toolbarButtonText}>Cancel</Text>
@@ -366,7 +523,6 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Bottom Instructions */}
       <View style={styles.bottomContainer}>
         <Text style={styles.instructionText}>
           {getInstructionText()}
@@ -377,21 +533,36 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
             styles.statusIndicator,
             { 
               backgroundColor: isDocumentDetected 
-                ? (stableFrameCount >= 5 ? '#4CAF50' : '#FF9800')
+                ? (detectionConfidence >= 0.8 ? '#4CAF50' : '#FF9800')
                 : '#007AFF' 
             }
           ]} />
           <Text style={styles.statusText}>
-            {isDocumentDetected 
-              ? (stableFrameCount >= 5 
-                  ? 'Document ready - tap capture' 
-                  : `Document detected (${Math.round(detectionConfidence * 100)}%)`)
-              : 'Position document in frame'
-            }
+            {(() => {
+              // DEBUG: Log actual render values
+              console.log('🎨 UI RENDER VALUES:', {
+                isDocumentDetected,
+                detectionConfidence,
+                confidenceCheck: detectionConfidence >= 0.8,
+                corners: !!detectedCorners
+              });
+              
+              if (isDocumentDetected) {
+                if (detectionConfidence >= 0.8) {
+                  console.log('🟢 Should show: Document detected - tap capture');
+                  return 'Document detected - tap capture';
+                } else {
+                  console.log('🟡 Should show: Document detected with %');
+                  return `Document detected (${Math.round(detectionConfidence * 100)}%)`;
+                }
+              } else {
+                console.log('🔵 Should show: Position document in frame');
+                return 'Position document in frame';
+              }
+            })()}
           </Text>
         </View>
         
-        {/* Manual Capture Button for Testing */}
         <TouchableOpacity 
           style={styles.captureButton}
           onPress={handleCapture}
@@ -429,8 +600,8 @@ const styles = StyleSheet.create({
   },
   permissionButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 30,
-    paddingVertical: 15,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     borderRadius: 8,
   },
   permissionButtonText: {
@@ -440,9 +611,7 @@ const styles = StyleSheet.create({
   },
   cameraContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#333',
+    position: 'relative',
   },
   overlayContainer: {
     position: 'absolute',
@@ -456,21 +625,21 @@ const styles = StyleSheet.create({
     top: '20%',
     left: '10%',
     right: '10%',
-    bottom: '30%',
+    height: '50%',
     borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.6)',
-    borderRadius: 12,
+    borderColor: '#007AFF',
     borderStyle: 'dashed',
-    backgroundColor: 'transparent',
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
   },
   detectionOverlay: {
     position: 'absolute',
     top: '20%',
     left: '10%',
     right: '10%',
-    bottom: '30%',
+    height: '50%',
     borderWidth: 3,
-    borderRadius: 12,
+    borderRadius: 8,
   },
   topToolbar: {
     position: 'absolute',
@@ -484,10 +653,8 @@ const styles = StyleSheet.create({
   },
   toolbarButton: {
     padding: 12,
-    borderRadius: 6,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    minWidth: 80,
-    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 8,
   },
   toolbarButtonText: {
     color: '#fff',
@@ -497,64 +664,62 @@ const styles = StyleSheet.create({
   docTypeLabel: {
     color: '#fff',
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '700',
     textAlign: 'center',
   },
   bottomContainer: {
     position: 'absolute',
-    bottom: 60,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
   },
   instructionText: {
     color: '#fff',
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 20,
-    lineHeight: 22,
+    lineHeight: 24,
   },
   statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
+    justifyContent: 'center',
+    marginBottom: 20,
   },
   statusIndicator: {
     width: 12,
     height: 12,
     borderRadius: 6,
-    marginRight: 10,
+    marginRight: 8,
   },
   statusText: {
     color: '#fff',
     fontSize: 14,
-  },
-  processingText: {
-    color: '#4CAF50',
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 15,
+    fontWeight: '500',
   },
   captureButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 30,
-    paddingVertical: 15,
-    borderRadius: 30,
-    marginTop: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    alignSelf: 'center',
+    minWidth: 200,
   },
   captureButtonText: {
     color: '#fff',
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     textAlign: 'center',
+  },
+  processingText: {
+    color: '#FF9800',
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 10,
+    fontWeight: '500',
   },
 });
 
