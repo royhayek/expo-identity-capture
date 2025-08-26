@@ -54,6 +54,32 @@ export type {
   QualityMetrics
 } from "./types/extraction";
 
+// Configuration types
+export type {
+  IdentityCaptureConfig,
+  ThemeColors,
+  TypographyConfig,
+  LayoutConfig,
+  AnimationConfig,
+  LocalizationConfig,
+  DetectionConfig,
+  CameraConfig,
+  ImageProcessingConfig,
+  ValidationConfig,
+  FrameDimensions,
+  FieldPosition
+} from "./types/config";
+
+// Configuration hooks and providers
+export { ConfigProvider, useConfig, useThemeConfig, useLocalizedStrings } from "./context/ConfigContext";
+export { useThemedStyles, useFrameStyle, useProgressColors } from "./utils/theme";
+
+// Responsive scaling utilities
+export { responsiveScale, useResponsiveTheme, getResponsiveFontSize, getResponsiveSpacing, RESPONSIVE_VALUES } from "./utils/responsiveTheme";
+
+// Enhanced localization system
+export { ConfigurableLocalizationManager, DEFAULT_STRINGS } from "./localization/ConfigurableLocalization";
+
 // Direct DocumentScanner access for backwards compatibility
 let DocumentScanner: any = null;
 try {

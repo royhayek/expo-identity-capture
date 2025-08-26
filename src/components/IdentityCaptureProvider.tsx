@@ -2,13 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { DocumentCapture } from './DocumentCapture';
 import { SelfieCapture } from './SelfieCapture';
 import { DocumentCaptureOptions, SelfieCaptureOptions } from '../types';
+import { ConfigProvider } from '../context/ConfigContext';
+import { IdentityCaptureConfig } from '../types/config';
 
 interface IdentityCaptureProviderProps {
   children: React.ReactNode;
+  config?: IdentityCaptureConfig;
 }
 
 export const IdentityCaptureProvider: React.FC<IdentityCaptureProviderProps> = ({ 
-  children 
+  children,
+  config
 }) => {
   const [documentCaptureState, setDocumentCaptureState] = useState<{
     visible: boolean;
@@ -52,7 +56,7 @@ export const IdentityCaptureProvider: React.FC<IdentityCaptureProviderProps> = (
   };
 
   return (
-    <>
+    <ConfigProvider config={config}>
       {children}
       
       {documentCaptureState.visible && documentCaptureState.options && (
@@ -70,6 +74,6 @@ export const IdentityCaptureProvider: React.FC<IdentityCaptureProviderProps> = (
           onClose={handleCloseSelfieCapture}
         />
       )}
-    </>
+    </ConfigProvider>
   );
 };

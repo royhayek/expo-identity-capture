@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Animated, Easing } from "react-native";
+import { Animated, Easing, Platform } from "react-native";
 import {
   View,
   Text,
@@ -29,6 +29,36 @@ import { useResizePlugin } from "vision-camera-resize-plugin";
 import { useRunOnJS } from "react-native-worklets-core";
 import { areCornersStable } from "../utils/DocumentDetectionProcessor";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
+import {
+  useThemeConfig,
+  useLocalizedStrings,
+  useBehaviorConfig,
+} from "../context/ConfigContext";
+import {
+  useThemedStyles,
+  useFrameStyle,
+  useProgressColors,
+  useButtonDimensions,
+} from "../utils/theme";
+import { RESPONSIVE_VALUES } from "../utils/responsiveTheme";
+import { mvs } from "react-native-size-matters";
+
+// Arrow Left SVG Component
+const ArrowLeftIcon: React.FC<{ size?: number; color?: string }> = ({ 
+  size = 24, 
+  color = "#fff" 
+}) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path 
+      d="M9.56994 18.8191C9.37994 18.8191 9.18994 18.7491 9.03994 18.5991L2.96994 12.5291C2.67994 12.2391 2.67994 11.7591 2.96994 11.4691L9.03994 5.39914C9.32994 5.10914 9.80994 5.10914 10.0999 5.39914C10.3899 5.68914 10.3899 6.16914 10.0999 6.45914L4.55994 11.9991L10.0999 17.5391C10.3899 17.8291 10.3899 18.3091 10.0999 18.5991C9.95994 18.7491 9.75994 18.8191 9.56994 18.8191Z" 
+      fill={color}
+    />
+    <Path 
+      d="M20.5 12.75H3.67004C3.26004 12.75 2.92004 12.41 2.92004 12C2.92004 11.59 3.26004 11.25 3.67004 11.25H20.5C20.91 11.25 21.25 11.59 21.25 12C21.25 12.41 20.91 12.75 20.5 12.75Z" 
+      fill={color}
+    />
+  </Svg>
+);
 
 interface CustomCameraViewProps {
   docType: VerifiedDocType;
@@ -48,6 +78,18 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   const [isFlashEnabled, setIsFlashEnabled] = useState(false);
   const [captureInProgress, setCaptureInProgress] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
+
+  // Configuration hooks
+  const theme = useThemedStyles();
+  const frameStyle = useFrameStyle(docType);
+  const progressColors = useProgressColors();
+  const captureButtonSize = useButtonDimensions("capture");
+  const { getDocumentLabel, getInstructionText, currentLanguage } =
+    useLocalizedStrings();
+  const behaviorConfig = useBehaviorConfig();
+
+  // Create dynamic styles based on theme
+  const styles = React.useMemo(() => createStyles(theme), [theme]);
 
   // Animated value for circular progress
   const progressAnimation = useRef(new Animated.Value(0)).current;
@@ -100,8 +142,14 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
       try {
         const detectedText = ocrResult?.text?.toLowerCase() || "";
 
-        if (!detectedText || detectedText.length < 10) {
-          console.log("📝 Insufficient text for validation (need 10+ chars)");
+        // Use configured text length requirement
+        const minTextLength =
+          behaviorConfig.detection?.ocr?.minTextLength || 10;
+
+        if (!detectedText || detectedText.length < minTextLength) {
+          console.log(
+            `📝 Insufficient text for validation (need ${minTextLength}+ chars)`
+          );
           return false;
         }
 
@@ -332,7 +380,10 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         // OCR with timeout
         const ocrPromise = TextRecognition.recognize(imagePath);
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("OCR_TIMEOUT")), 5000)
+          setTimeout(
+            () => reject(new Error("OCR_TIMEOUT")),
+            behaviorConfig.detection?.ocr?.timeout || 5000
+          )
         );
 
         const ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
@@ -611,12 +662,12 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
 
     setCaptureInProgress(true);
 
-    // Start progress animation
+    // Start progress animation with configured duration
     progressAnimation.setValue(0);
     Animated.timing(progressAnimation, {
       toValue: 1,
-      duration: 1500, // 1.5 seconds
-      easing: Easing.linear,
+      duration: theme.animation.progress?.duration || 1500,
+      easing: Easing.linear, // TODO: Map animation.easing to Easing functions
       useNativeDriver: true,
     }).start();
 
@@ -680,68 +731,22 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     runOCRValidation,
   ]);
 
-  const getDocumentTypeLabel = () => {
-    switch (docType) {
-      case "passport":
-        return "Passport";
-      case "civil_id":
-        return "Civil ID";
-      case "army_card":
-        return "Army Card";
-      case "residence_permit":
-        return "Residence Permit";
-      case "civil_register":
-        return "Civil Register";
-      default:
-        return "Document";
-    }
-  };
+  const getDocumentTypeLabel = React.useCallback(() => {
+    return getDocumentLabel(docType);
+  }, [getDocumentLabel, docType]);
 
-  const getInstructionText = () => {
-    if (docType === "passport") {
-      return "Hold your passport in your hand and make sure it fully fits in the frame.";
-    }
-    if (docType === "civil_id") {
-      return "Hold your civil ID in your hand and make sure it fully fits in the frame.";
-    }
-    if (docType === "army_card") {
-      return "Hold your army card in your hand and make sure it fully fits in the frame.";
-    }
-    if (docType === "civil_register") {
-      return "Hold your civil register in your hand and make sure it fully fits in the frame.";
-    }
-    if (docType === "residence_permit") {
-      return "Hold your residence permit in your hand and make sure it fully fits in the frame.";
-    }
-    return "Hold your document in your hand and make sure it fully fits in the frame.";
-  };
+  const getDocumentInstructionText = React.useCallback(() => {
+    return getInstructionText(docType);
+  }, [getInstructionText, docType]);
 
   const getOverlayStyle = () => {
-    if (docType === "passport") {
-      // Passport: Vertical rectangle (taller than wide) - scaled down to be smaller
-      return {
-        top: "28%" as const,
-        left: "10%" as const,
-        right: "10%" as const,
-        height: "50%" as const,
-      };
-    } else if (docType === "civil_register") {
-      // Civil Register: Square shape
-      return {
-        top: "35%" as const,
-        left: "10%" as const,
-        right: "10%" as const,
-        height: "30%" as const,
-      };
-    } else {
-      // ID Cards: Proper credit card aspect ratio (1.586:1 based on Lebanese civil ID reference)
-      return {
-        top: "35%" as const,
-        left: "8%" as const,
-        right: "8%" as const,
-        height: "25%" as const, // Calculated to maintain proper ID card aspect ratio
-      };
-    }
+    // Use configured frame style, with fallbacks to current defaults
+    return {
+      top: frameStyle.top,
+      left: frameStyle.left,
+      right: frameStyle.right,
+      height: frameStyle.height,
+    };
   };
 
   if (!hasPermission) {
@@ -798,7 +803,7 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         {/* SVG overlay with cutout */}
         {(() => {
           const { width: screenWidth, height: screenHeight } =
-            Dimensions.get("window");
+            Dimensions.get("screen");
           const overlayStyle = getOverlayStyle();
 
           // Convert percentage to pixels
@@ -914,412 +919,336 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
       </View>
 
       {/* Clean Header */}
-      <View style={styles.cleanHeader}>
-        <TouchableOpacity style={styles.cleanBackButton} onPress={onCancel}>
-          <Text style={styles.backArrow}>←</Text>
-        </TouchableOpacity>
-        <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>
-            {getDocumentTypeLabel()}
-          </Text>
-        </View>
-        {enableFlash && (
-          <TouchableOpacity style={styles.flashButton} onPress={toggleFlash}>
-            <Text style={styles.flashIcon}>{isFlashEnabled ? "🔦" : "💡"}</Text>
+      <View style={styles.absoluteContent}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={onCancel}>
+            <ArrowLeftIcon 
+              size={28} 
+              color={theme.colors.text?.inverse || "#fff"} 
+            />
           </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Instruction Text */}
-      <View style={styles.instructionContainer}>
-        <Text style={styles.simpleInstruction}>{getInstructionText()}</Text>
-        <Text style={styles.simpleInstruction}>
-          يرجى إمساك جواز سفرك بيدك والتأكد من ظهوره بالكامل داخل الكاميرا.
-        </Text>
-      </View>
-
-      {/* Modern Capture Button with Circular Progress */}
-      <View style={styles.captureButtonContainer}>
-        <TouchableOpacity
-          style={styles.captureButton}
-          onPress={handleCapture}
-          disabled={captureInProgress}
-        >
-          <View style={styles.captureButtonInner}>
-            {captureInProgress && (
-              <Animated.View
-                style={[
-                  styles.progressRing,
-                  {
-                    transform: [
-                      {
-                        rotate: progressAnimation.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: ["0deg", "360deg"],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              >
-                <Svg width={70} height={70} viewBox="0 0 70 70">
-                  <Defs>
-                    <LinearGradient
-                      id="progressGradient"
-                      x1="0%"
-                      y1="0%"
-                      x2="100%"
-                      y2="0%"
-                    >
-                      <Stop offset="0%" stopColor="#9b27b0" stopOpacity="0" />
-                      <Stop offset="30%" stopColor="#9b27b0" stopOpacity="0.5" />
-                      <Stop offset="70%" stopColor="#9b27b0" stopOpacity="0.8" />
-                      <Stop offset="100%" stopColor="#9b27b0" stopOpacity="1" />
-                    </LinearGradient>
-                  </Defs>
-                  <Circle
-                    cx="35"
-                    cy="35"
-                    r="32"
-                    stroke="url(#progressGradient)"
-                    strokeWidth="8"
-                    fill="none"
-                    strokeDasharray="80 200"
-                    strokeLinecap="round"
-                  />
-                </Svg>
-              </Animated.View>
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerTitle}>{getDocumentTypeLabel()}</Text>
+          </View>
+          <View style={styles.rightButtonContainer}>
+            {enableFlash && (
+              <TouchableOpacity style={styles.flashButton} onPress={toggleFlash}>
+                <Text style={styles.flashIcon}>
+                  {isFlashEnabled ? "🔦" : "💡"}
+                </Text>
+              </TouchableOpacity>
             )}
           </View>
-        </TouchableOpacity>
+        </View>
+
+        {/* Instruction Text */}
+        <View style={styles.instructionContainer}>
+          <Text style={styles.simpleInstruction}>
+            {getDocumentInstructionText()}
+          </Text>
+        </View>
+
+        {/* Modern Capture Button with Circular Progress */}
+        <View style={styles.captureButtonContainer}>
+          <TouchableOpacity
+            style={styles.captureButton}
+            onPress={handleCapture}
+            disabled={captureInProgress}
+          >
+            <View style={styles.captureButtonInner}>
+              {captureInProgress && (
+                <Animated.View
+                  style={[
+                    styles.progressRing,
+                    {
+                      transform: [
+                        {
+                          rotate: progressAnimation.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ["0deg", "360deg"],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <Svg
+                    width={theme.layout.buttons.capture.width}
+                    height={theme.layout.buttons.capture.height}
+                    viewBox={`0 0 ${theme.layout.buttons.capture.width} ${theme.layout.buttons.capture.height}`}
+                  >
+                    <Defs>
+                      <LinearGradient
+                        id="progressGradient"
+                        x1="0%"
+                        y1="0%"
+                        x2="100%"
+                        y2="0%"
+                      >
+                        <Stop
+                          offset="0%"
+                          stopColor={progressColors.gradient[0]}
+                          stopOpacity="0"
+                        />
+                        <Stop
+                          offset="30%"
+                          stopColor={
+                            progressColors.gradient[1] ||
+                            progressColors.gradient[0]
+                          }
+                          stopOpacity="0.5"
+                        />
+                        <Stop
+                          offset="70%"
+                          stopColor={
+                            progressColors.gradient[2] ||
+                            progressColors.gradient[1] ||
+                            progressColors.gradient[0]
+                          }
+                          stopOpacity="0.8"
+                        />
+                        <Stop
+                          offset="100%"
+                          stopColor={
+                            progressColors.gradient[2] ||
+                            progressColors.gradient[1] ||
+                            progressColors.gradient[0]
+                          }
+                          stopOpacity="1"
+                        />
+                      </LinearGradient>
+                    </Defs>
+                    <Circle
+                      cx={theme.layout.buttons.capture.width / 2}
+                      cy={theme.layout.buttons.capture.height / 2}
+                      r={theme.layout.buttons.capture.width / 2 - 6}
+                      stroke="url(#progressGradient)"
+                      strokeWidth={Math.max(
+                        4,
+                        theme.layout.buttons.capture.width * 0.08
+                      )}
+                      fill="none"
+                      strokeDasharray="80 200"
+                      strokeLinecap="round"
+                    />
+                  </Svg>
+                </Animated.View>
+              )}
+            </View>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#000",
-  },
-  permissionContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#000",
-  },
-  permissionText: {
-    color: "#fff",
-    fontSize: 18,
-    textAlign: "center",
-    marginBottom: 20,
-  },
-  permissionButton: {
-    backgroundColor: "#007AFF",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 16,
-  },
-  permissionButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  cameraContainer: {
-    flex: 1,
-    position: "relative",
-  },
-  overlayContainer: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  overlaySection: {
-    position: "absolute",
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-  },
-  documentGuide: {
-    position: "absolute",
-    borderWidth: 2,
-    borderColor: "#ffffff",
-    borderStyle: "dashed",
-    borderRadius: 16,
-    backgroundColor: "transparent",
-  },
-  detectionOverlay: {
-    position: "absolute",
-    borderWidth: 3,
-    borderRadius: 16,
-  },
-  // Modern UI Styles
-  modernHeader: {
-    position: "absolute",
-    top: 60,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    zIndex: 10,
-  },
-  modernBackButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(0, 0, 0, 0.6)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  backButtonIcon: {
-    color: "#fff",
-    fontSize: 24,
-    fontWeight: "600",
-  },
-  modernFlashButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(0, 0, 0, 0.6)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  flashButtonText: {
-    fontSize: 18,
-  },
-  modernTitleContainer: {
-    position: "absolute",
-    top: 120,
-    left: 20,
-    right: 20,
-    alignItems: "center",
-    zIndex: 10,
-    paddingVertical: 20,
-    paddingHorizontal: 24,
-  },
-  modernTitle: {
-    color: "#fff",
-    fontSize: 24,
-    fontWeight: "700",
-    textAlign: "center",
-    marginBottom: 8,
-  },
-  modernDescription: {
-    color: "#fff",
-    fontSize: 16,
-    textAlign: "center",
-    lineHeight: 22,
-    opacity: 0.9,
-    marginBottom: 16,
-  },
-  modernStatusContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modernStatusIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 8,
-  },
-  modernStatusText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "500",
-    opacity: 0.9,
-  },
-  modernCaptureContainer: {
-    position: "absolute",
-    bottom: 60,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 10,
-  },
-  modernCaptureButton: {
-    width: 70,
-    height: 70,
-    borderRadius: 40,
-    backgroundColor: "#fff",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 16,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-  },
-  modernCaptureInner: {
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modernCaptureText: {
-    color: "#000",
-    fontSize: 12,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  modernProcessingText: {
-    color: "#fff",
-    fontSize: 14,
-    textAlign: "center",
-    fontWeight: "500",
-    opacity: 0.9,
-  },
-  // Legacy styles for backward compatibility
-  topToolbar: {
-    display: "none",
-  },
-  toolbarButton: {
-    display: "none",
-  },
-  toolbarButtonText: {
-    display: "none",
-  },
-  docTypeLabel: {
-    display: "none",
-  },
-  bottomContainer: {
-    display: "none",
-  },
-  instructionText: {
-    display: "none",
-  },
-  statusContainer: {
-    display: "none",
-  },
-  statusIndicator: {
-    display: "none",
-  },
-  statusText: {
-    display: "none",
-  },
-  captureButtonText: {
-    display: "none",
-  },
-  processingText: {
-    display: "none",
-  },
-  // New Clean UI Styles
-  cleanHeader: {
-    position: "absolute",
-    top: 60,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-  },
-  cleanBackButton: {
-    width: 60,
-    height: 60,
-    zIndex: 11,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  backArrow: {
-    color: "#fff",
-    fontSize: 28,
-    fontWeight: "500",
-  },
-  headerTitleContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  flashButton: {
-    width: 60,
-    height: 60,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  flashIcon: {
-    fontSize: 24,
-  },
-  headerSpacer: {
-    width: 60,
-  },
-  instructionContainer: {
-    position: "absolute",
-    top: 130,
-    left: 36,
-    right: 36,
-    gap: 6,
-    alignItems: "center",
-    zIndex: 10,
-  },
-  simpleInstruction: {
-    color: "#fff",
-    fontSize: 16,
-    textAlign: "center",
-    fontWeight: "400",
-  },
-  captureButtonContainer: {
-    position: "absolute",
-    bottom: 60,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 10,
-  },
-  captureButton: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: "#fff",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  captureButtonInner: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: "#fff",
-    justifyContent: "center",
-    alignItems: "center",
-    position: "relative",
-  },
-  progressRing: {
-    position: "absolute",
-    top: -8,
-    left: -8,
-  },
-  progressIndicator: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: "#4CAF50",
-  },
-  documentFrameBorder: {
-    position: "absolute",
-    borderWidth: 2,
-    borderColor: "#ffffff",
-    borderRadius: 16,
-    backgroundColor: "transparent",
-  },
-  detectedFrameBorder: {
-    position: "absolute",
-    borderWidth: 4,
-    borderColor: "#4CAF50",
-    borderRadius: 16,
-    backgroundColor: "transparent",
-  },
-});
+// Create dynamic styles based on theme
+const createStyles = (theme: any) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    permissionContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      backgroundColor: theme.colors.background,
+    },
+    permissionText: {
+      color: theme.colors.text.inverse,
+      fontSize: theme.typography.sizes.lg,
+      textAlign: "center",
+      marginBottom: theme.spacing.lg,
+      fontFamily: theme.typography.fonts.regular,
+    },
+    permissionButton: {
+      backgroundColor: theme.colors.primary,
+      paddingHorizontal: theme.spacing.lg,
+      paddingVertical: theme.spacing.sm,
+      borderRadius: theme.layout.borderRadius,
+    },
+    permissionButtonText: {
+      color: theme.colors.text.inverse,
+      fontSize: theme.typography.sizes.base,
+      fontWeight: theme.typography.weights.semibold,
+      fontFamily: theme.typography.fonts.semibold,
+    },
+    cameraContainer: {
+      flex: 1,
+      position: "relative",
+    },
+    absoluteContent: {
+      flex: 1,
+      position: "absolute",
+      top: mvs(Platform.OS === "android" ? 40 : 50),
+      left: 0,
+      right: 0,
+      bottom: 0,
+    },
+    overlayContainer: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+    },
+    modernTitle: {
+      color: "#fff",
+      fontSize: 24,
+      fontWeight: "700",
+      textAlign: "center",
+      marginBottom: 8,
+    },
+    // Legacy styles for backward compatibility
+    topToolbar: {
+      display: "none",
+    },
+    toolbarButton: {
+      display: "none",
+    },
+    toolbarButtonText: {
+      display: "none",
+    },
+    docTypeLabel: {
+      display: "none",
+    },
+    bottomContainer: {
+      display: "none",
+    },
+    instructionText: {
+      display: "none",
+    },
+    statusContainer: {
+      display: "none",
+    },
+    statusIndicator: {
+      display: "none",
+    },
+    statusText: {
+      display: "none",
+    },
+    captureButtonText: {
+      display: "none",
+    },
+    processingText: {
+      display: "none",
+    },
+    // New Clean UI Styles
+    header: {
+      zIndex: 10,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: theme.spacing.md,
+      justifyContent: "space-between",
+    },
+    backButton: {
+      width: theme.layout.buttons.header.width,
+      height: theme.layout.buttons.header.height,
+      zIndex: 10,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    headerTitleContainer: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      justifyContent: "center",
+      alignItems: "center",
+      zIndex: 5,
+    },
+    headerTitle: {
+      color: theme.colors.text?.inverse || "#fff",
+      fontSize: theme.typography.sizes.lg,
+      fontWeight: theme.typography.weights.semibold,
+      fontFamily: theme.typography.fonts.semibold,
+      textAlign: "center",
+    },
+    rightButtonContainer: {
+      width: theme.layout.buttons.header.width,
+      height: theme.layout.buttons.header.height,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    flashButton: {
+      width: theme.layout.buttons.header.width,
+      height: theme.layout.buttons.header.height,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    flashIcon: {
+      fontSize: 24,
+    },
+    headerSpacer: {
+      width: 60,
+    },
+    instructionContainer: {
+      flex: 1,
+      alignItems: "center",
+      marginTop: theme.spacing.md,
+      marginHorizontal: theme.spacing.lg,
+    },
+    simpleInstruction: {
+      color: theme.colors.text?.inverse || "#fff",
+      fontSize: theme.typography.sizes.base,
+      textAlign: "center",
+      fontWeight: theme.typography.weights.normal,
+      fontFamily: theme.typography.fonts.regular,
+      lineHeight:
+        theme.typography.sizes.base *
+        (theme.typography.lineHeights?.normal || 1.4),
+    },
+    captureButtonContainer: {
+      marginBottom: theme.spacing.lg + 20,
+      alignItems: "center",
+    },
+    captureButton: {
+      width: theme.layout.buttons?.capture?.width || 60,
+      height: theme.layout.buttons?.capture?.height || 60,
+      borderRadius: (theme.layout.buttons?.capture?.width || 60) / 2,
+      backgroundColor: theme.colors.surface,
+      justifyContent: "center",
+      alignItems: "center",
+      shadowColor: theme.colors.background,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.3,
+      shadowRadius: 4,
+      elevation: 5,
+    },
+    captureButtonInner: {
+      width: (theme.layout.buttons?.capture?.width || 70) - 16,
+      height: (theme.layout.buttons?.capture?.height || 70) - 16,
+      borderRadius: ((theme.layout.buttons?.capture?.width || 70) - 16) / 2,
+      backgroundColor: theme.colors.surface,
+      justifyContent: "center",
+      alignItems: "center",
+      position: "relative",
+    },
+    progressRing: {
+      position: "absolute",
+      top: -8,
+      left: -8,
+    },
+    progressIndicator: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor: "#4CAF50",
+    },
+    documentFrameBorder: {
+      position: "absolute",
+      borderWidth: 2,
+      borderColor: "#ffffff",
+      borderRadius: 16,
+      backgroundColor: "transparent",
+    },
+    detectedFrameBorder: {
+      position: "absolute",
+      borderWidth: 4,
+      borderColor: "#4CAF50",
+      borderRadius: 16,
+      backgroundColor: "transparent",
+    },
+  });
 
 export default CustomCameraView;
