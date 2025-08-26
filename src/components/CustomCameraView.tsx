@@ -50,14 +50,16 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     lastValidationResult: boolean | null;
     stableDetectionCount: number;
     needsValidation: boolean;
-    hasConfirmedDetection: boolean; // NEW: Track if OCR has confirmed detection
+    hasConfirmedDetection: boolean;
+    consecutiveFailures: number; // Track consecutive OCR failures
   }>({
     inProgress: false,
     lastValidationTime: 0,
     lastValidationResult: null,
     stableDetectionCount: 0,
     needsValidation: false,
-    hasConfirmedDetection: false
+    hasConfirmedDetection: false,
+    consecutiveFailures: 0
   });
   
   // Update detection state function
@@ -175,8 +177,8 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     }
 
     const now = Date.now();
-    // Throttle OCR checks - minimum 3 seconds between validations
-    if (now - ocrValidationRef.current.lastValidationTime < 3000) {
+    // Throttle OCR checks - minimum 1.5 seconds between validations for faster response
+    if (now - ocrValidationRef.current.lastValidationTime < 1500) {
       console.log('⏱️ OCR validation throttled - using cached result');
       const cachedResult = ocrValidationRef.current.lastValidationResult;
       if (cachedResult !== null) {
@@ -187,10 +189,14 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
       return;
     }
 
-    console.log('🔍 Starting OCR-based document detection...');
-
-    ocrValidationRef.current.inProgress = true;
+    // Set inProgress and time if not already set by frame processor
+    if (!ocrValidationRef.current.inProgress) {
+      ocrValidationRef.current.inProgress = true;
+      console.log('🔒 OCR: Setting inProgress flag');
+    }
     ocrValidationRef.current.lastValidationTime = now;
+
+    console.log('🔍 Starting OCR-based document detection...');
 
     try {
       // Take a photo for OCR analysis
@@ -226,22 +232,50 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         sampleText: ocrResult?.text?.substring(0, 50) || 'No text'
       });
       
-      // Directly update detection state based on OCR results
+      // Stable detection: Only change state if we have a clear result
       ocrValidationRef.current.lastValidationResult = isValidDocument;
-      setIsDocumentDetected(isValidDocument);
-      setDetectionConfidence(isValidDocument ? 0.9 : 0.3);
       
       if (isValidDocument) {
+        // Document clearly detected - immediately show detection
         console.log('✅ DOCUMENT DETECTED via OCR - showing green frame');
+        setIsDocumentDetected(true);
+        setDetectionConfidence(0.9);
+        ocrValidationRef.current.consecutiveFailures = 0; // Reset failure counter
       } else {
-        console.log('❌ No valid document detected via OCR');
+        // Document not detected - use failure counter for stability
+        ocrValidationRef.current.consecutiveFailures++;
+        
+        if (!isDocumentDetected) {
+          // We weren't detecting before, stay not detecting
+          console.log('❌ No document detected (maintaining not detected state)');
+          setIsDocumentDetected(false);
+          setDetectionConfidence(0.3);
+        } else {
+          // We were detecting before - only switch off after multiple failures
+          if (ocrValidationRef.current.consecutiveFailures >= 3) {
+            console.log('❌ Document lost after 3 consecutive OCR failures');
+            setIsDocumentDetected(false);
+            setDetectionConfidence(0.3);
+            ocrValidationRef.current.consecutiveFailures = 0;
+          } else {
+            console.log(`⚠️ OCR failed (${ocrValidationRef.current.consecutiveFailures}/3) - keeping detection active`);
+            setDetectionConfidence(0.7 - (ocrValidationRef.current.consecutiveFailures * 0.1));
+          }
+        }
       }
       
     } catch (error) {
       console.log('⚠️ OCR detection failed:', error instanceof Error ? error.message : 'Unknown');
       ocrValidationRef.current.lastValidationResult = false;
-      setIsDocumentDetected(false);
-      setDetectionConfidence(0.1);
+      
+      // On OCR error, only change state if we weren't detecting before
+      if (!isDocumentDetected) {
+        setIsDocumentDetected(false);
+        setDetectionConfidence(0.1);
+      } else {
+        console.log('⚠️ OCR error but document was detected before - keeping detection active');
+        setDetectionConfidence(0.6); // Lower confidence but keep detection
+      }
       
     } finally {
       ocrValidationRef.current.inProgress = false;
@@ -317,14 +351,14 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     'worklet';
     
     try {
-      // Frame throttling for performance - check every 30 frames (~1 second at 30fps)
+      // Frame throttling for performance - check every 5 frames (~0.17 seconds at 30fps)
       frameCountRef.current = frameCountRef.current + 1;
-      if (frameCountRef.current % 30 !== 0) return;
+      if (frameCountRef.current % 5 !== 0) return;
       
       const frameWidth = frame.width;
       const frameHeight = frame.height;
       
-      console.log('🔍 OCR-based detection check (every 30 frames)');
+      console.log('🔍 OCR-based detection check (every 5 frames)');
       
       // Create default corners for frame overlay
       const boxTop = frameHeight * 0.2;
@@ -339,17 +373,42 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         bottomRight: { x: boxLeft + boxWidth, y: boxTop + boxHeight }
       };
       
-      // Always update with default state - OCR will determine if document is detected
-      runUpdateDetection({
-        isDetected: false, // OCR will update this if document is found
-        corners: defaultCorners,
-        confidence: 0.5,
-        aspectRatio: 1.0,
-        isValidShape: true,
-      });
+      // Only reset detection state if OCR is not running and we don't currently detect a document
+      // This prevents flickering while allowing proper state updates
+      if (!ocrValidationRef.current.inProgress && !isDocumentDetected) {
+        console.log('🔷 Frame processor: Setting detection to FALSE (no OCR, no current detection)');
+        runUpdateDetection({
+          isDetected: false,
+          corners: defaultCorners,
+          confidence: 0.5,
+          aspectRatio: 1.0,
+          isValidShape: true,
+        });
+      } else if (!ocrValidationRef.current.inProgress) {
+        console.log('🔶 Frame processor: Keeping current detection state (no OCR running)');
+        runUpdateDetection({
+          isDetected: isDocumentDetected,
+          corners: defaultCorners,
+          confidence: detectionConfidence,
+          aspectRatio: 1.0,
+          isValidShape: true,
+        });
+      } else {
+        console.log('🔸 Frame processor: OCR in progress - not updating detection state');
+      }
       
       // Trigger OCR validation to check for document content
       console.log('🔍 Triggering OCR-based document detection...');
+      
+      // Set inProgress flag BEFORE calling OCR to prevent race condition
+      if (!ocrValidationRef.current.inProgress) {
+        const now = Date.now();
+        if (now - ocrValidationRef.current.lastValidationTime >= 1500) {
+          ocrValidationRef.current.inProgress = true;
+          console.log('🔒 Frame processor: Setting OCR inProgress flag');
+        }
+      }
+      
       runRealtimeOCRValidation(docType, 1); // Always pass stable frame count as 1
       
     } catch (error) {
