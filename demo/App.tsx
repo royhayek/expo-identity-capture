@@ -17,6 +17,7 @@ import {
   arabicStrings,
   frenchStrings,
   CameraManager,
+  SelfieManager,
   IdentityCaptureConfig,
 } from "expo-identity-capture";
 import type { VerifiedDocType } from "expo-identity-capture";
@@ -44,27 +45,27 @@ const demoConfig: IdentityCaptureConfig = {
       },
     },
     // layout: {
-      // frame: {
-      // Custom frame sizes for demo
-      // passport: { top: "25%", left: "15%", right: "15%", height: "45%" },
-      // civil_register: {
-      //   top: "30%",
-      //   left: "15%",
-      //   right: "15%",
-      //   height: "25%",
-      // },
-      // },
-      // Responsive button sizes (will be scaled based on device)
-      // buttons: {
-      // capture: { width: 80, height: 80 }, // Slightly larger for demo
-      // header: { width: 50, height: 50 }, // Smaller header buttons
-      // },
-      // Responsive spacing
-      // spacing: {
-      // sm: 12, // Larger small spacing
-      // md: 20, // Larger medium spacing
-      // lg: 28, // Larger large spacing
-      // },
+    // frame: {
+    // Custom frame sizes for demo
+    // passport: { top: "25%", left: "15%", right: "15%", height: "45%" },
+    // civil_register: {
+    //   top: "30%",
+    //   left: "15%",
+    //   right: "15%",
+    //   height: "25%",
+    // },
+    // },
+    // Responsive button sizes (will be scaled based on device)
+    // buttons: {
+    // capture: { width: 80, height: 80 }, // Slightly larger for demo
+    // header: { width: 50, height: 50 }, // Smaller header buttons
+    // },
+    // Responsive spacing
+    // spacing: {
+    // sm: 12, // Larger small spacing
+    // md: 20, // Larger medium spacing
+    // lg: 28, // Larger large spacing
+    // },
     // },
     // typography: {
     // Custom responsive font sizes
@@ -125,6 +126,7 @@ export default function App() {
   const [disableDetection, setDisableDetection] = useState(false);
   const [enableFlash, setEnableFlash] = useState(true);
   const [showCustomCamera, setShowCustomCamera] = useState(false);
+  const [showSelfieCapture, setShowSelfieCapture] = useState(false);
   const [pendingDocType, setPendingDocType] = useState<VerifiedDocType | null>(
     null
   );
@@ -221,11 +223,6 @@ export default function App() {
             timestamp: new Date().toISOString(),
           },
         ]);
-
-        Alert.alert(
-          "Success",
-          `Document captured with custom camera!\n\nPhoto saved: ${pendingDocType.toUpperCase()}\n\nCustom capture with Cancel + Flash only controls completed successfully.`
-        );
       } catch (error) {
         Alert.alert(
           "Error",
@@ -245,54 +242,50 @@ export default function App() {
 
   const handleSelfieCapture = async () => {
     try {
-      console.log("Selfie capture initiated");
+      console.log("📱 Selfie capture initiated");
 
-      // Use expo-image-picker for selfie capture since it's simpler for selfies
-      const { ImagePicker } = require("expo-image-picker");
-
-      // Request permissions
-      const permissionResult =
-        await ImagePicker.requestCameraPermissionsAsync();
-      if (!permissionResult.granted) {
-        Alert.alert(
-          "Permission Required",
-          "Camera permission is required to take selfies"
-        );
-        return;
-      }
-
-      // Launch camera
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: false,
-        aspect: [1, 1],
-        quality: 1,
-      });
-
-      if (!result.cancelled && result.assets && result.assets.length > 0) {
-        const selfieResult: SelfieCaptureResult = {
-          image: result.assets[0].uri,
-          capturedAt: new Date().toISOString(),
-        };
-
-        console.log("Selfie captured successfully:", selfieResult);
-        setResults((prev) => [
-          ...prev,
-          {
-            type: "selfie",
-            data: selfieResult,
-            timestamp: new Date().toISOString(),
-          },
-        ]);
-
-        Alert.alert("Success", "Selfie captured!");
-      }
+      // Show the new custom selfie capture modal
+      setShowSelfieCapture(true);
     } catch (error) {
       Alert.alert(
         "Error",
-        error instanceof Error ? error.message : "Failed to capture selfie"
+        error instanceof Error
+          ? error.message
+          : "Failed to initiate selfie capture"
       );
     }
+  };
+
+  const handleCustomSelfieCapture = async (imageUri: string) => {
+    console.log("📸 Custom selfie captured:", imageUri);
+    setShowSelfieCapture(false);
+
+    try {
+      const selfieResult: SelfieCaptureResult = {
+        image: imageUri,
+        capturedAt: new Date().toISOString(),
+      };
+
+      console.log("Selfie captured successfully:", selfieResult);
+      setResults((prev) => [
+        ...prev,
+        {
+          type: "selfie",
+          data: selfieResult,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (error) {
+      Alert.alert(
+        "Error",
+        error instanceof Error ? error.message : "Failed to process selfie"
+      );
+    }
+  };
+
+  const handleCustomSelfieCancel = () => {
+    console.log("Custom selfie capture cancelled");
+    setShowSelfieCapture(false);
   };
 
   const clearResults = () => {
@@ -490,6 +483,14 @@ export default function App() {
           onCapture={handleCustomCameraCapture}
           onCancel={handleCustomCameraCancel}
           disableDetection={disableDetection}
+          enableFlash={enableFlash}
+        />
+
+        {/* Custom Selfie Modal */}
+        <SelfieManager
+          visible={showSelfieCapture}
+          onCapture={handleCustomSelfieCapture}
+          onCancel={handleCustomSelfieCancel}
           enableFlash={enableFlash}
         />
       </SafeAreaView>

@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   StatusBar,
-  Alert,
   Dimensions,
 } from "react-native";
 import Svg, {
@@ -25,7 +24,6 @@ import {
   useCameraPermission,
   useFrameProcessor,
 } from "react-native-vision-camera";
-import { useResizePlugin } from "vision-camera-resize-plugin";
 import { useRunOnJS } from "react-native-worklets-core";
 import { areCornersStable } from "../utils/DocumentDetectionProcessor";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
@@ -102,7 +100,6 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const cameraRef = useRef<Camera>(null);
-  const resizePlugin = useResizePlugin();
 
   // Previous detection state for stability checking
   const previousCornersRef = useRef<any>(null);
@@ -698,25 +695,12 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         } else {
           console.log("⚠️ OCR validation failed - still allowing capture");
           // Still allow capture even if OCR fails (fallback to visual detection)
-          Alert.alert(
-            "Document Captured",
-            "Photo taken successfully. OCR text validation could not confirm document type, but visual detection was successful.",
-            [
-              {
-                text: "Retake",
-                style: "cancel",
-              },
-              {
-                text: "Use This Photo",
-                onPress: () => onCapture(imagePath),
-              },
-            ]
-          );
+          onCapture(imagePath);
         }
       }
     } catch (error) {
       console.error("❌ Capture failed:", error);
-      Alert.alert("Capture Failed", "Could not take photo. Please try again.");
+      throw error;
     } finally {
       setCaptureInProgress(false);
       // Reset progress animation
@@ -793,10 +777,6 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
           }}
           onError={(error) => {
             console.error("❌ Camera error:", error);
-            Alert.alert(
-              "Camera Error",
-              `Failed to initialize camera: ${error.message}`
-            );
           }}
         />
 
@@ -1024,7 +1004,7 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
                       r={theme.layout.buttons.capture.width / 2 - 6}
                       stroke="url(#progressGradient)"
                       strokeWidth={Math.max(
-                        4,
+                        6,
                         theme.layout.buttons.capture.width * 0.08
                       )}
                       fill="none"

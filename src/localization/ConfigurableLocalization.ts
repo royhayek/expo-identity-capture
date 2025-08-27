@@ -43,6 +43,7 @@ export const DEFAULT_STRINGS = {
       flashOff: 'Flash Off',
       back: 'Back',
       front: 'Front',
+      selfie_instruction: 'Position your face in the center and look into the camera',
     },
   },
   
@@ -86,6 +87,7 @@ export const DEFAULT_STRINGS = {
       flashOff: 'الفلاش مطفئ',
       back: 'رجوع',
       front: 'أمامي',
+      selfie_instruction: 'ضع وجهك في الوسط وانظر إلى الكاميرا',
     },
   },
   
@@ -129,6 +131,7 @@ export const DEFAULT_STRINGS = {
       flashOff: 'Flash Désactivé',
       back: 'Retour',
       front: 'Avant',
+      selfie_instruction: 'Positionnez votre visage au centre et regardez dans la caméra',
     },
   },
 };

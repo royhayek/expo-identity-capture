@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "expo-identity-capture",
+    "slug": "expo-identity-capture",
+    "version": "1.0.0",
+    "description": "React Native package for capturing ID documents and selfies in Expo prebuild apps",
+    "sdkVersion": "49.0.0",
+    "platforms": [
+      "ios",
+      "android"
+    ]
+  }
+}

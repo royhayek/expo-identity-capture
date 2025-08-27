@@ -6,6 +6,8 @@ export {
   validateExtractedData
 } from "./api/documentCapture";
 
+export { SelfieCaptureAPI } from "./api/selfieCapture";
+
 // Import for the unified API object
 import { 
   captureAndExtract,
@@ -13,6 +15,8 @@ import {
   detectDocumentType,
   validateExtractedData
 } from "./api/documentCapture";
+
+import { SelfieCaptureAPI } from "./api/selfieCapture";
 
 // Component and utility exports
 export { IdentityCaptureProvider } from "./components/IdentityCaptureProvider";
@@ -24,7 +28,9 @@ export { ImageProcessor } from "./utils/imageProcessor";
 
 // Custom capture exports for host app integration
 export { CameraManager, default as GlobalCameraManager } from "./core/CameraManager";
+export { SelfieManager, default as GlobalSelfieManager } from "./core/SelfieManager";
 export { default as CustomCameraView } from "./components/CustomCameraView";
+export { ModernSelfieCapture } from "./components/SelfieCapture";
 export { CustomDocumentCapture } from "./core/CustomDocumentCapture";
 export type { CustomCaptureOptions, CustomCaptureResult } from "./core/CustomDocumentCapture";
 
@@ -97,5 +103,6 @@ export const IdentityCapture = {
   captureAndExtract,
   captureMultipleDocuments,
   detectDocumentType,
-  validateExtractedData
+  validateExtractedData,
+  captureSelfie: SelfieCaptureAPI.captureSelfie
 };
