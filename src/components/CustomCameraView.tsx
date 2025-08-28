@@ -541,14 +541,14 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
           return;
         }
 
-        // Frame throttling for performance - check every 5 frames (~0.17 seconds at 30fps)
+        // Frame throttling for performance - check every 10 frames (~0.33 seconds at 30fps)
         frameCountRef.current = frameCountRef.current + 1;
-        if (frameCountRef.current % 5 !== 0) return;
+        if (frameCountRef.current % 10 !== 0) return;
 
         const frameWidth = frame.width;
         const frameHeight = frame.height;
 
-        console.log("🔍 OCR-based detection check (every 5 frames)");
+        console.log("🔍 OCR-based detection check (every 10 frames)");
 
         // Create default corners for frame overlay based on document type
         let boxTop: number,

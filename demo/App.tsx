@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   StyleSheet,
   Text,
@@ -8,6 +8,11 @@ import {
   Alert,
   SafeAreaView,
   Switch,
+  Image,
+  Modal,
+  Dimensions,
+  Animated,
+  Platform,
 } from "react-native";
 import {
   IdentityCaptureProvider,
@@ -130,6 +135,11 @@ export default function App() {
   const [pendingDocType, setPendingDocType] = useState<VerifiedDocType | null>(
     null
   );
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImageTitle, setSelectedImageTitle] = useState<string>("");
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageZoom, setImageZoom] = useState(1);
+  const imageScrollRef = useRef<ScrollView>(null);
 
   const getLanguageStrings = () => {
     switch (language) {
@@ -178,7 +188,9 @@ export default function App() {
           type: "document",
           data: {
             type: documentType as any,
-            images: [result.processedImageUri],
+            images: [result.originalImageUri, result.croppedImageUri],
+            originalImageUri: result.originalImageUri,
+            croppedImageUri: result.croppedImageUri,
             capturedAt: new Date().toISOString(),
             metadata: {
               extractedFields: Object.keys(result.fields).length,
@@ -196,8 +208,8 @@ export default function App() {
     }
   };
 
-  const handleCustomCameraCapture = async (imageUri: string) => {
-    console.log("📸 Custom camera captured:", imageUri);
+  const handleCustomCameraCapture = async (result: { originalImageUri: string; croppedImageUri: string }) => {
+    console.log("📸 Custom camera captured:", result);
     setShowCustomCamera(false);
 
     if (pendingDocType) {
@@ -213,7 +225,9 @@ export default function App() {
             type: "document",
             data: {
               type: pendingDocType as any,
-              images: [imageUri], // Use the real captured image
+              images: [result.originalImageUri, result.croppedImageUri], // Use both images
+              originalImageUri: result.originalImageUri,
+              croppedImageUri: result.croppedImageUri,
               capturedAt: new Date().toISOString(),
               metadata: {
                 extractedFields: 0, // Custom capture complete - would need OCR processing for field extraction
@@ -256,13 +270,14 @@ export default function App() {
     }
   };
 
-  const handleCustomSelfieCapture = async (imageUri: string) => {
-    console.log("📸 Custom selfie captured:", imageUri);
+  const handleCustomSelfieCapture = async (result: { originalImageUri: string; croppedImageUri: string }) => {
+    console.log("📸 Custom selfie captured:", result);
     setShowSelfieCapture(false);
 
     try {
       const selfieResult: SelfieCaptureResult = {
-        image: imageUri,
+        image: result.originalImageUri,
+        croppedImage: result.croppedImageUri,
         capturedAt: new Date().toISOString(),
       };
 
@@ -291,6 +306,38 @@ export default function App() {
   const clearResults = () => {
     setResults([]);
   };
+
+  const handleImagePress = (imageUri: string, title: string = "Image") => {
+    if (imageUri) {
+      setSelectedImage(imageUri);
+      setSelectedImageTitle(title);
+      setImageZoom(1);
+      setShowImageModal(true);
+    } else {
+      Alert.alert('Image not available', 'This image could not be loaded.');
+    }
+  };
+
+  const closeImageModal = () => {
+    setShowImageModal(false);
+    setSelectedImage(null);
+    setSelectedImageTitle("");
+    setImageZoom(1);
+  };
+
+  const handleZoomIn = () => {
+    setImageZoom(prev => Math.min(prev + 0.5, 3));
+  };
+
+  const handleZoomOut = () => {
+    setImageZoom(prev => Math.max(prev - 0.5, 0.5));
+  };
+
+  const handleResetZoom = () => {
+    setImageZoom(1);
+    imageScrollRef.current?.scrollTo({ x: 0, y: 0, animated: true });
+  };
+
 
   return (
     <IdentityCaptureProvider config={demoConfig}>
@@ -435,9 +482,16 @@ export default function App() {
           {/* Results */}
           <View style={styles.section}>
             <View style={styles.resultsHeader}>
-              <Text style={styles.sectionTitle}>
-                Results ({results.length})
-              </Text>
+              <View>
+                <Text style={styles.sectionTitle}>
+                  Results ({results.length})
+                </Text>
+                {results.length > 0 && (
+                  <Text style={styles.resultsTip}>
+                    Tap images to preview in fullscreen
+                  </Text>
+                )}
+              </View>
               {results.length > 0 && (
                 <TouchableOpacity
                   onPress={clearResults}
@@ -453,23 +507,141 @@ export default function App() {
             ) : (
               results.map((result, index) => (
                 <View key={index} style={styles.resultItem}>
-                  <Text style={styles.resultType}>
-                    {result.type === "document"
-                      ? `📄 ${(
-                          result.data as DocumentCaptureResult
-                        ).type.toUpperCase()}`
-                      : "🤳 SELFIE"}
-                  </Text>
-                  <Text style={styles.resultTime}>
-                    {new Date(result.timestamp).toLocaleTimeString()}
-                  </Text>
-                  <Text style={styles.resultDetails}>
-                    {result.type === "document"
-                      ? `${
-                          (result.data as DocumentCaptureResult).images.length
-                        } image(s)`
-                      : "1 image"}
-                  </Text>
+                  <View style={styles.resultHeader}>
+                    <Text style={styles.resultType}>
+                      {result.type === "document"
+                        ? `📄 ${(
+                            result.data as DocumentCaptureResult
+                          ).type.toUpperCase()}`
+                        : "🤳 SELFIE"}
+                    </Text>
+                    <Text style={styles.resultTime}>
+                      {new Date(result.timestamp).toLocaleTimeString()}
+                    </Text>
+                    <Text style={styles.resultDetails}>
+                      {result.type === "document"
+                        ? `${
+                            (result.data as DocumentCaptureResult).images.length
+                          } image(s)`
+                        : "1 image"}
+                    </Text>
+                  </View>
+                  
+                  {/* Image Display Section - Always visible */}
+                  <View style={styles.imageSection}>
+                    {result.type === "document" ? (
+                    <View style={styles.imageContainer}>
+                      {(result.data as DocumentCaptureResult).originalImageUri && (
+                        <View style={styles.imageWrapper}>
+                          <Text style={styles.imageLabel}>Original</Text>
+                          <TouchableOpacity
+                            onPress={() => handleImagePress(
+                              (result.data as DocumentCaptureResult).originalImageUri!,
+                              `Original - ${(result.data as DocumentCaptureResult).type.toUpperCase()}`
+                            )}
+                          >
+                            <Image
+                              source={{ uri: (result.data as DocumentCaptureResult).originalImageUri }}
+                              style={styles.capturedImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      {(result.data as DocumentCaptureResult).croppedImageUri && (
+                        <View style={styles.imageWrapper}>
+                          <Text style={styles.imageLabel}>Cropped</Text>
+                          <TouchableOpacity
+                            onPress={() => handleImagePress(
+                              (result.data as DocumentCaptureResult).croppedImageUri!,
+                              `Cropped - ${(result.data as DocumentCaptureResult).type.toUpperCase()}`
+                            )}
+                          >
+                            <Image
+                              source={{ uri: (result.data as DocumentCaptureResult).croppedImageUri }}
+                              style={styles.capturedImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      {/* Fallback to images array if specific URIs not available */}
+                      {!(result.data as DocumentCaptureResult).originalImageUri && 
+                       (result.data as DocumentCaptureResult).images.length > 0 && (
+                        <View style={styles.imageWrapper}>
+                          <Text style={styles.imageLabel}>Captured Image</Text>
+                          <TouchableOpacity
+                            onPress={() => handleImagePress(
+                              (result.data as DocumentCaptureResult).images[0],
+                              `Captured - ${(result.data as DocumentCaptureResult).type.toUpperCase()}`
+                            )}
+                          >
+                            <Image
+                              source={{ uri: (result.data as DocumentCaptureResult).images[0] }}
+                              style={styles.capturedImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  ) : (
+                    <View style={styles.imageContainer}>
+                      {(result.data as SelfieCaptureResult).croppedImage && (
+                        <View style={styles.imageWrapper}>
+                          <Text style={styles.imageLabel}>Original</Text>
+                          <TouchableOpacity
+                            onPress={() => handleImagePress(
+                              (result.data as SelfieCaptureResult).image,
+                              "Original Selfie"
+                            )}
+                          >
+                            <Image
+                              source={{ uri: (result.data as SelfieCaptureResult).image }}
+                              style={styles.capturedImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      {(result.data as SelfieCaptureResult).croppedImage && (
+                        <View style={styles.imageWrapper}>
+                          <Text style={styles.imageLabel}>Cropped</Text>
+                          <TouchableOpacity
+                            onPress={() => handleImagePress(
+                              (result.data as SelfieCaptureResult).croppedImage!,
+                              "Cropped Selfie"
+                            )}
+                          >
+                            <Image
+                              source={{ uri: (result.data as SelfieCaptureResult).croppedImage }}
+                              style={styles.capturedImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                      {/* Fallback if no cropped image */}
+                      {!(result.data as SelfieCaptureResult).croppedImage && (
+                        <View style={styles.imageWrapper}>
+                          <Text style={styles.imageLabel}>Selfie</Text>
+                          <TouchableOpacity
+                            onPress={() => handleImagePress(
+                              (result.data as SelfieCaptureResult).image,
+                              "Original Selfie"
+                            )}
+                          >
+                            <Image
+                              source={{ uri: (result.data as SelfieCaptureResult).image }}
+                              style={styles.capturedImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                  </View>
                 </View>
               ))
             )}
@@ -493,6 +665,84 @@ export default function App() {
           onCancel={handleCustomSelfieCancel}
           enableFlash={enableFlash}
         />
+
+        {/* Enhanced Image Preview Modal */}
+        <Modal
+          animationType="fade"
+          transparent={true}
+          visible={showImageModal}
+          onRequestClose={closeImageModal}
+        >
+          <View style={styles.modalOverlay}>
+            {/* Header with title and close button */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{selectedImageTitle}</Text>
+              <TouchableOpacity 
+                style={styles.modalCloseButton}
+                onPress={closeImageModal}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Scrollable image container */}
+            <ScrollView
+              ref={imageScrollRef}
+              style={styles.imageScrollContainer}
+              contentContainerStyle={styles.imageScrollContent}
+              maximumZoomScale={3}
+              minimumZoomScale={0.5}
+              showsHorizontalScrollIndicator={true}
+              showsVerticalScrollIndicator={true}
+              centerContent={true}
+              bounces={false}
+              pinchGestureEnabled={true}
+              zoomScale={imageZoom}
+            >
+              {selectedImage && (
+                <Image
+                  source={{ uri: selectedImage }}
+                  style={[
+                    styles.fullscreenImage,
+                    {
+                      width: Dimensions.get('window').width * imageZoom,
+                      height: Dimensions.get('window').height * 0.7 * imageZoom,
+                    }
+                  ]}
+                  resizeMode="contain"
+                />
+              )}
+            </ScrollView>
+
+            {/* Zoom controls */}
+            <View style={styles.zoomControls}>
+              <TouchableOpacity
+                style={styles.zoomButton}
+                onPress={handleZoomOut}
+              >
+                <Text style={styles.zoomButtonText}>−</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.zoomButton, styles.resetButton]}
+                onPress={handleResetZoom}
+              >
+                <Text style={styles.zoomButtonText}>Reset</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.zoomButton}
+                onPress={handleZoomIn}
+              >
+                <Text style={styles.zoomButtonText}>+</Text>
+              </TouchableOpacity>
+              
+              <View style={styles.zoomInfo}>
+                <Text style={styles.zoomInfoText}>{Math.round(imageZoom * 100)}%</Text>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </IdentityCaptureProvider>
   );
@@ -583,8 +833,14 @@ const styles = StyleSheet.create({
   resultsHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 15,
+  },
+  resultsTip: {
+    fontSize: 12,
+    color: "#999",
+    fontStyle: "italic",
+    marginTop: 4,
   },
   clearButton: {
     backgroundColor: "#FF3B30",
@@ -614,6 +870,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 2.22,
   },
+  resultHeader: {
+    marginBottom: 15,
+  },
+  imageSection: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#e0e0e0",
+  },
   resultType: {
     fontSize: 16,
     fontWeight: "600",
@@ -628,5 +893,114 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#007AFF",
     marginTop: 4,
+  },
+  imageContainer: {
+    flexDirection: "row",
+    marginTop: 15,
+    gap: 10,
+  },
+  imageWrapper: {
+    flex: 1,
+    alignItems: "center",
+  },
+  imageLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#666",
+    marginBottom: 5,
+    textAlign: "center",
+  },
+  capturedImage: {
+    width: 100,
+    height: 120,
+    borderRadius: 8,
+    backgroundColor: "#f0f0f0",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.95)",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    paddingTop: Platform.OS === "ios" ? 50 : 15,
+    backgroundColor: "rgba(0, 0, 0, 0.8)",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.2)",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "white",
+    flex: 1,
+  },
+  modalCloseButton: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "white",
+  },
+  imageScrollContainer: {
+    flex: 1,
+  },
+  imageScrollContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fullscreenImage: {
+    alignSelf: "center",
+  },
+  zoomControls: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+    backgroundColor: "rgba(0, 0, 0, 0.8)",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.2)",
+    gap: 15,
+  },
+  zoomButton: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 25,
+    width: 50,
+    height: 50,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resetButton: {
+    paddingHorizontal: 20,
+    width: "auto",
+  },
+  zoomButtonText: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "white",
+  },
+  zoomInfo: {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 15,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    marginLeft: 10,
+  },
+  zoomInfoText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "white",
   },
 });

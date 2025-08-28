@@ -11,6 +11,9 @@ import DocumentScanner, {
   ResponseType,
 } from "react-native-document-scanner-plugin";
 import CustomDocumentCapture from './CustomDocumentCapture';
+import { ImageProcessor, DocumentCorners } from '../utils/imageProcessor';
+import { DEFAULT_CONFIG } from '../types/config';
+import { TemplateLoader } from '../utils/templateLoader';
 
 // Enhanced text preprocessing and analysis
 interface TextAnalysisResult {
@@ -118,14 +121,14 @@ export class DocumentExtractor {
 
       // Step 2: Process captured image through existing extraction pipeline
       const textAnalysis = await this.performTextAnalysis(
-        captureResult.processedImageUri,
+        captureResult.croppedImageUri,
         options.docHint
       );
 
       // Step 3: Extract fields using templates and OCR  
       // For now, use direct OCR extraction until template integration is complete
       const extractionResult = await this.extractOCRDocument(
-        { processedImageUri: captureResult.processedImageUri },
+        { processedImageUri: captureResult.croppedImageUri },
         options.docHint
       );
 
@@ -1051,16 +1054,92 @@ export class DocumentExtractor {
         fields: Object.keys(fields),
       });
 
+      // Generate cropped image from the processed image
+      const croppedImageUri = await this.generateCroppedImage(
+        captureResult.processedImageUri,
+        docType
+      );
+
       return {
         docType,
         originalImageUri: captureResult.originalImageUri,
-        processedImageUri: captureResult.processedImageUri,
+        croppedImageUri,
         fields,
         quality: captureResult.quality,
       };
     } catch (error) {
       console.error("❌ OCR extraction failed:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Generate cropped image containing only the document without background
+   */
+  private static async generateCroppedImage(imageUri: string, docType: VerifiedDocType): Promise<string> {
+    try {
+      console.log(`✂️ Generating cropped image for ${docType}`);
+
+      // Try to use template-based cropping first
+      console.log(`🔍 Looking for template for ${docType}...`);
+      const template = await TemplateLoader.loadTemplate(docType);
+      
+      if (template) {
+        console.log(`📋 Using template-based cropping for ${docType}`);
+        return await ImageProcessor.cropDocumentFromTemplate(imageUri, template);
+      }
+
+      // Fallback to frame config from default config
+      console.log(`⚠️ No template found for ${docType}, using frame config`);
+      const frameConfig = DEFAULT_CONFIG.theme.layout.frame[docType];
+      
+      if (!frameConfig) {
+        console.warn(`⚠️ No frame config found for ${docType}, using default crop`);
+        // Fallback to a generic crop if no specific config
+        return await ImageProcessor.cropDocumentFromFrame(imageUri, {
+          top: '30%',
+          left: '10%',
+          right: '10%',
+          height: '40%'
+        });
+      }
+
+      // Convert FrameDimensions to required format
+      const cropConfig = {
+        top: frameConfig.top || '30%',
+        left: frameConfig.left || '10%',
+        right: frameConfig.right || '10%',
+        height: frameConfig.height || '40%'
+      };
+
+      const croppedUri = await ImageProcessor.cropDocumentFromFrame(imageUri, cropConfig);
+      console.log(`✅ Document cropped successfully: ${croppedUri}`);
+      
+      return croppedUri;
+    } catch (error) {
+      console.error(`❌ Failed to generate cropped image for ${docType}:`, error);
+      // If cropping fails, return the processed image as fallback
+      console.warn(`⚠️ Using processed image as cropped fallback`);
+      return imageUri;
+    }
+  }
+
+  /**
+   * Generate cropped image using detected corners (for custom camera captures)
+   */
+  private static async generateCroppedImageFromCorners(imageUri: string, corners: DocumentCorners): Promise<string> {
+    try {
+      console.log(`✂️ Generating cropped image from detected corners`);
+      
+      const croppedUri = await ImageProcessor.cropDocumentFromCorners(imageUri, corners);
+      console.log(`✅ Document cropped successfully using corners: ${croppedUri}`);
+      
+      return croppedUri;
+    } catch (error) {
+      console.error(`❌ Failed to generate cropped image from corners:`, error);
+      // If cropping fails, return the original image as fallback
+      console.warn(`⚠️ Using original image as cropped fallback`);
+      return imageUri;
     }
   }
 
@@ -2041,7 +2120,7 @@ export class DocumentExtractor {
   }
 
   /**
-   * Enhanced template loading with validation
+   * Enhanced template loading with validation using TemplateLoader
    */
   private static async loadTemplateAdvanced(
     docType: VerifiedDocType,
@@ -2057,6 +2136,16 @@ export class DocumentExtractor {
 
     console.log(`📋 Loading template for ${docType}...`);
 
+    // Try to load from template files first
+    const templateFromFile = await TemplateLoader.loadTemplate(docType);
+    if (templateFromFile) {
+      console.log(`✅ Template loaded from JSON file for ${docType}: ${Object.keys(templateFromFile.fields).length} fields defined`);
+      this.templates.set(templateKey, templateFromFile);
+      return templateFromFile;
+    }
+
+    // Fallback to hardcoded templates
+    console.log(`⚠️ No template file found for ${docType}, using fallback templates`);
     let templateData: DocumentTemplate;
 
     try {

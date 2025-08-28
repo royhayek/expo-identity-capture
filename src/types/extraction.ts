@@ -8,9 +8,9 @@ export interface OcrField {
 
 export interface ExtractedIdResult {
   docType: VerifiedDocType;
-  // Original & cleaned images
-  originalImageUri: string;
-  processedImageUri: string;
+  // Image URIs
+  originalImageUri: string;  // Original captured image with background
+  croppedImageUri: string;   // Document-only cropped image without background
   // Crops per field (optional but useful for audit/manual review)
   crops?: Record<string, string>; // fieldName -> imageUri
   // Parsed fields

@@ -2,11 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { Modal, Alert } from 'react-native';
 import CustomCameraView from '../components/CustomCameraView';
 import { VerifiedDocType } from '../types/extraction';
+import { ImageProcessor } from '../utils/imageProcessor';
+import { DEFAULT_CONFIG } from '../types/config';
+import { TemplateLoader } from '../utils/templateLoader';
+
+export interface CaptureResult {
+  originalImageUri: string;
+  croppedImageUri: string;
+}
 
 interface CameraManagerProps {
   visible: boolean;
   docType: VerifiedDocType;
-  onCapture: (imageUri: string) => void;
+  onCapture: (result: CaptureResult) => void;
   onCancel: () => void;
   disableDetection?: boolean;
   enableFlash?: boolean;
@@ -31,10 +39,58 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
     setIsModalVisible(visible);
   }, [visible]);
 
-  const handleCapture = (imageUri: string) => {
+  const handleCapture = async (imageUri: string) => {
     console.log(`📸 Image captured: ${imageUri}`);
     setIsModalVisible(false);
-    onCapture(imageUri);
+    
+    try {
+      // Try to use template-based cropping first
+      let croppedImageUri: string;
+      
+      console.log(`🔍 Looking for template for ${docType}...`);
+      const template = await TemplateLoader.loadTemplate(docType);
+      
+      if (template) {
+        console.log(`📋 Using template-based cropping for ${docType}`);
+        croppedImageUri = await ImageProcessor.cropDocumentFromTemplate(imageUri, template);
+      } else {
+        // Fallback to frame config from DEFAULT_CONFIG
+        console.log(`⚠️ No template found for ${docType}, using frame config`);
+        const frameConfig = DEFAULT_CONFIG.theme.layout.frame[docType];
+        
+        if (!frameConfig) {
+          console.warn(`⚠️ No frame config found for ${docType}, using default crop`);
+          croppedImageUri = await ImageProcessor.cropDocumentFromFrame(imageUri, {
+            top: '30%',
+            left: '10%',
+            right: '10%',
+            height: '40%'
+          });
+        } else {
+          const cropConfig = {
+            top: frameConfig.top || '30%',
+            left: frameConfig.left || '10%',
+            right: frameConfig.right || '10%',
+            height: frameConfig.height || '40%'
+          };
+          croppedImageUri = await ImageProcessor.cropDocumentFromFrame(imageUri, cropConfig);
+        }
+      }
+      
+      console.log(`✅ Generated cropped image: ${croppedImageUri}`);
+      
+      onCapture({
+        originalImageUri: imageUri,
+        croppedImageUri: croppedImageUri
+      });
+    } catch (error) {
+      console.error('❌ Failed to generate cropped image:', error);
+      // Fallback: use original image as both original and cropped
+      onCapture({
+        originalImageUri: imageUri,
+        croppedImageUri: imageUri
+      });
+    }
   };
 
   const handleCancel = () => {
@@ -83,7 +139,7 @@ class GlobalCameraManager {
    * Show camera and wait for result
    * This is handled by the CameraManager React component
    */
-  public async showCamera(docType: VerifiedDocType, disableDetection?: boolean, enableFlash?: boolean): Promise<{ imageUri: string; cancelled: boolean }> {
+  public async showCamera(docType: VerifiedDocType, disableDetection?: boolean, enableFlash?: boolean): Promise<{ result: CaptureResult | null; cancelled: boolean }> {
     return new Promise((resolve, reject) => {
       this.captureResolver = resolve;
       this.captureRejecter = reject;
@@ -99,9 +155,9 @@ class GlobalCameraManager {
   /**
    * Handle capture result from camera
    */
-  public handleCapture(imageUri: string) {
+  public handleCapture(result: CaptureResult) {
     if (this.captureResolver) {
-      this.captureResolver({ imageUri, cancelled: false });
+      this.captureResolver({ result, cancelled: false });
       this.captureResolver = null;
       this.captureRejecter = null;
     }
@@ -112,7 +168,7 @@ class GlobalCameraManager {
    */
   public handleCancel() {
     if (this.captureResolver) {
-      this.captureResolver({ imageUri: null, cancelled: true });
+      this.captureResolver({ result: null, cancelled: true });
       this.captureResolver = null;
       this.captureRejecter = null;
     }

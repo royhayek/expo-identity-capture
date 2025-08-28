@@ -7,12 +7,23 @@ export type OutputFormat = 'uri' | 'base64';
 export interface DocumentCaptureResult {
   type: DocumentType;
   images: string[];
+  originalImageUri?: string;
+  croppedImageUri?: string;
   sides?: DocumentSide[];
   capturedAt: string;
+  metadata?: {
+    extractedFields?: number;
+    quality?: {
+      blurScore: number;
+      brightness: number;
+      glareDetected: boolean;
+    };
+  };
 }
 
 export interface SelfieCaptureResult {
   image: string;
+  croppedImage?: string;
   capturedAt: string;
 }
 

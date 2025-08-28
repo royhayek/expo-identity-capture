@@ -2,6 +2,9 @@ import { VerifiedDocType } from "../types/extraction";
 import { Camera } from 'react-native-vision-camera';
 import OpenCVDocumentDetection from './OpenCVDocumentDetection';
 import GlobalCameraManager from './CameraManager';
+import { ImageProcessor } from '../utils/imageProcessor';
+import { DEFAULT_CONFIG } from '../types/config';
+import { TemplateLoader } from '../utils/templateLoader';
 
 /**
  * Custom Document Capture using OpenCV and Vision Camera
@@ -22,7 +25,7 @@ export interface CustomCaptureOptions {
 
 export interface CustomCaptureResult {
   originalImageUri: string;
-  processedImageUri: string;
+  croppedImageUri: string;
   detectedCorners: { x: number; y: number }[];
   captureTimestamp: string;
 }
@@ -112,19 +115,64 @@ export class CustomDocumentCapture {
         console.log('❌ Camera capture cancelled by user');
         return {
           originalImageUri: '',
-          processedImageUri: '',
+          croppedImageUri: '',
           detectedCorners: [],
           captureTimestamp: new Date().toISOString(),
           cancelled: true,
         };
       }
       
-      console.log('✅ Photo captured successfully:', result.imageUri);
+      console.log('✅ Photo captured successfully:', result.result?.originalImageUri);
+      
+      // Generate cropped version using the same approach as CameraManager
+      const originalImageUri = result.result?.originalImageUri || '';
+      let croppedImageUri = result.result?.croppedImageUri || originalImageUri;
+      
+      // If we don't have a pre-cropped image, generate one
+      if (croppedImageUri === originalImageUri && originalImageUri) {
+        try {
+          console.log(`🔍 Looking for template for ${options.docHint}...`);
+          const template = await TemplateLoader.loadTemplate(options.docHint);
+          
+          if (template) {
+            console.log(`📋 Using template-based cropping for ${options.docHint}`);
+            croppedImageUri = await ImageProcessor.cropDocumentFromTemplate(originalImageUri, template);
+          } else {
+            // Fallback to frame config
+            console.log(`⚠️ No template found for ${options.docHint}, using frame config`);
+            const frameConfig = DEFAULT_CONFIG.theme.layout.frame[options.docHint];
+            
+            if (!frameConfig) {
+              console.warn(`⚠️ No frame config found for ${options.docHint}, using default crop`);
+              croppedImageUri = await ImageProcessor.cropDocumentFromFrame(originalImageUri, {
+                top: '30%',
+                left: '10%',
+                right: '10%',
+                height: '40%'
+              });
+            } else {
+              const cropConfig = {
+                top: frameConfig.top || '30%',
+                left: frameConfig.left || '10%',
+                right: frameConfig.right || '10%',
+                height: frameConfig.height || '40%'
+              };
+              croppedImageUri = await ImageProcessor.cropDocumentFromFrame(originalImageUri, cropConfig);
+            }
+          }
+          
+          console.log(`✅ Generated cropped image: ${croppedImageUri}`);
+        } catch (error) {
+          console.error('❌ Failed to generate cropped image:', error);
+          // Use original as fallback
+          croppedImageUri = originalImageUri;
+        }
+      }
       
       // Process the captured image
       const processedResult: CustomCaptureResult = {
-        originalImageUri: result.imageUri,
-        processedImageUri: result.imageUri, // TODO: Apply OpenCV processing
+        originalImageUri,
+        croppedImageUri,
         detectedCorners: [
           // TODO: Detect actual corners using OpenCV
           { x: 100, y: 150 },
@@ -199,7 +247,7 @@ export class CustomDocumentCapture {
 
       return {
         originalImageUri,
-        processedImageUri,
+        croppedImageUri: processedImageUri,
         detectedCorners: captureData.corners,
         captureTimestamp: captureData.captureTimestamp,
       };
