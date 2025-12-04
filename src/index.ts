@@ -26,6 +26,7 @@ export { frenchStrings } from "./localization/languages/french";
 export { FlowRules } from "./utils/flowRules";
 export { ImageProcessor } from "./utils/imageProcessor";
 export { TemplateLoader } from "./utils/templateLoader";
+export { DocumentValidation } from "./utils/documentValidation";
 
 // Custom capture exports for host app integration
 export { CameraManager, default as GlobalCameraManager } from "./core/CameraManager";

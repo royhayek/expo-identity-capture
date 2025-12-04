@@ -65,6 +65,7 @@ export interface CaptureOptions {
   saveProcessedImages?: boolean;
   useCustomCapture?: boolean; // Enable custom OpenCV-based document capture
   enableFlash?: boolean; // Show flash toggle button in custom camera
+  enableOCRValidation?: boolean; // Enable OCR-based document validation before returning results
 }
 
 export interface QualityMetrics {

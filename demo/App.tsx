@@ -130,6 +130,7 @@ export default function App() {
   const [useCustomCapture, setUseCustomCapture] = useState(true);
   const [disableDetection, setDisableDetection] = useState(false);
   const [enableFlash, setEnableFlash] = useState(true);
+  const [enableOCRValidation, setEnableOCRValidation] = useState(false);
   const [showCustomCamera, setShowCustomCamera] = useState(false);
   const [showSelfieCapture, setShowSelfieCapture] = useState(false);
   const [pendingDocType, setPendingDocType] = useState<VerifiedDocType | null>(
@@ -421,9 +422,32 @@ export default function App() {
               />
             </View>
           )}
+
+          {/* OCR Validation Toggle - only show when custom capture is enabled */}
+          {useCustomCapture && (
+            <View style={styles.toggleContainer}>
+              <Text style={styles.toggleLabel}>Enable OCR Validation:</Text>
+              <Switch
+                value={enableOCRValidation}
+                onValueChange={setEnableOCRValidation}
+                trackColor={{ false: "#767577", true: "#81b0ff" }}
+                thumbColor={enableOCRValidation ? "#007AFF" : "#f4f3f4"}
+              />
+            </View>
+          )}
           {useCustomCapture && !enableFlash && (
             <Text style={styles.toggleInfo}>
               ℹ️ Flash button disabled - camera will use auto lighting only
+            </Text>
+          )}
+          {useCustomCapture && enableOCRValidation && (
+            <Text style={styles.toggleInfo}>
+              ℹ️ OCR validation enabled - will verify document type before capture
+            </Text>
+          )}
+          {useCustomCapture && !enableOCRValidation && (
+            <Text style={styles.toggleInfo}>
+              ℹ️ OCR validation disabled - will capture without document verification
             </Text>
           )}
 
@@ -656,6 +680,7 @@ export default function App() {
           onCancel={handleCustomCameraCancel}
           disableDetection={disableDetection}
           enableFlash={enableFlash}
+          enableOCRValidation={enableOCRValidation}
         />
 
         {/* Custom Selfie Modal */}

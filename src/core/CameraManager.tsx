@@ -18,6 +18,7 @@ interface CameraManagerProps {
   onCancel: () => void;
   disableDetection?: boolean;
   enableFlash?: boolean;
+  enableOCRValidation?: boolean;
 }
 
 /**
@@ -31,6 +32,7 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
   onCancel,
   disableDetection = false,
   enableFlash = true,
+  enableOCRValidation = false,
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(visible);
 
@@ -114,6 +116,7 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
         onCancel={handleCancel}
         disableDetection={disableDetection}
         enableFlash={enableFlash}
+        enableOCRValidation={enableOCRValidation}
       />
     </Modal>
   );
@@ -139,7 +142,7 @@ class GlobalCameraManager {
    * Show camera and wait for result
    * This is handled by the CameraManager React component
    */
-  public async showCamera(docType: VerifiedDocType, disableDetection?: boolean, enableFlash?: boolean): Promise<{ result: CaptureResult | null; cancelled: boolean }> {
+  public async showCamera(docType: VerifiedDocType, disableDetection?: boolean, enableFlash?: boolean, enableOCRValidation?: boolean): Promise<{ result: CaptureResult | null; cancelled: boolean }> {
     return new Promise((resolve, reject) => {
       this.captureResolver = resolve;
       this.captureRejecter = reject;

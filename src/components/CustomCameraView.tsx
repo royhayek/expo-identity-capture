@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Animated, Easing, Platform } from "react-native";
+import { Animated, Easing, Platform, Alert } from "react-native";
 import {
   View,
   Text,
@@ -27,6 +27,7 @@ import {
 import { useRunOnJS } from "react-native-worklets-core";
 import { areCornersStable } from "../utils/DocumentDetectionProcessor";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
+import { DocumentValidation } from "../utils/documentValidation";
 import {
   useThemeConfig,
   useLocalizedStrings,
@@ -64,6 +65,7 @@ interface CustomCameraViewProps {
   onCancel: () => void;
   disableDetection?: boolean;
   enableFlash?: boolean;
+  enableOCRValidation?: boolean;
 }
 
 export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
@@ -72,6 +74,7 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   onCancel,
   disableDetection = false,
   enableFlash = true,
+  enableOCRValidation = false,
 }) => {
   const [isFlashEnabled, setIsFlashEnabled] = useState(false);
   const [captureInProgress, setCaptureInProgress] = useState(false);
@@ -133,193 +136,34 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
 
   const runUpdateDetection = useRunOnJS(updateDetection, [updateDetection]);
 
-  // Document text validation function (declared first so it can be used by other functions)
+  // Document text validation function using improved validation utility
   const validateDocumentText = useCallback(
     (ocrResult: any, documentType: VerifiedDocType): boolean => {
       try {
-        const detectedText = ocrResult?.text?.toLowerCase() || "";
+        const detectedText = ocrResult?.text || "";
+        const minTextLength = behaviorConfig.detection?.ocr?.minTextLength || 15;
+        
+        const validationResult = DocumentValidation.validateDocumentText(
+          detectedText, 
+          documentType, 
+          minTextLength
+        );
 
-        // Use configured text length requirement
-        const minTextLength =
-          behaviorConfig.detection?.ocr?.minTextLength || 10;
-
-        if (!detectedText || detectedText.length < minTextLength) {
-          console.log(
-            `📝 Insufficient text for validation (need ${minTextLength}+ chars)`
-          );
-          return false;
-        }
-
-        // Skip obvious debug/log text
-        const debugPatterns = [
-          /log\s+/i,
-          /console/i,
-          /debug/i,
-          /error/i,
-          /warning/i,
-          /starting\s+/i,
-          /validation/i,
-          /detected\s+text/i,
-          /analysis/i,
-          /buffer/i,
-          /dimensions/i,
-          /confidence/i,
-        ];
-
-        let debugMatches = 0;
-        debugPatterns.forEach((pattern) => {
-          if (pattern.test(detectedText)) debugMatches++;
+        console.log(`📋 OCR Validation Result:`, {
+          isValid: validationResult.isValid,
+          confidence: `${(validationResult.confidence * 100).toFixed(0)}%`,
+          textLength: validationResult.textLength,
+          detectedKeywords: validationResult.detectedKeywords.length,
+          message: DocumentValidation.getValidationMessage(validationResult)
         });
 
-        if (debugMatches >= 2) {
-          console.log("❌ Text appears to be debug output, not document text");
-          return false;
-        }
-
-        // Document type specific keywords (relaxed for better matching)
-        const documentKeywords: Record<VerifiedDocType, string[]> = {
-          passport: [
-            "passport",
-            "passeport",
-            "جواز سفر",
-            "republic",
-            "state",
-            "nationality",
-            "birth",
-            "sex",
-            "country",
-            "document",
-            "given name",
-            "surname",
-            "دولة",
-            "جمهورية",
-          ],
-          civil_id: [
-            "civil",
-            "identity",
-            "card",
-            "national",
-            "citizen",
-            "بطاقة مدنية",
-            "هوية",
-            "republic",
-            "state",
-            "الجمهورية",
-            "الكويت",
-            "kuwait",
-            "مدني",
-            "رقم مدني",
-          ],
-          army_card: [
-            "military",
-            "army",
-            "armed forces",
-            "service",
-            "rank",
-            "القوات المسلحة",
-            "عسكرية",
-            "الجيش",
-            "رتبة",
-            "عسكري",
-          ],
-          residence_permit: [
-            "residence",
-            "permit",
-            "visa",
-            "stay",
-            "إقامة",
-            "تصريح إقامة",
-            "resident",
-            "immigration",
-            "work",
-            "هجرة",
-            "مقيم",
-            "إذن",
-          ],
-          civil_register: [
-            "register",
-            "civil register",
-            "سجل مدني",
-            "قيد",
-            "عائلي",
-            "family",
-            "أسرة",
-            "registration",
-            "قيود",
-            "نفوس",
-            "population",
-            "records",
-            "سجلات",
-            "دائرة النفوس",
-          ],
-        };
-
-        // General document indicators
-        const generalIndicators = [
-          "republic",
-          "state",
-          "government",
-          "ministry",
-          "authority",
-          "number",
-          "date",
-          "name",
-          "nationality",
-          "issued",
-          "valid",
-          "الجمهورية",
-          "دولة",
-          "حكومة",
-          "وزارة",
-          "رسمي",
-          "رقم",
-          "تاريخ",
-          "اسم",
-          "جنسية",
-          "صادر",
-          "صالح",
-        ];
-
-        const specificKeywords = documentKeywords[documentType] || [];
-
-        // Count matches
-        let specificMatches = 0;
-        specificKeywords.forEach((keyword) => {
-          if (detectedText.includes(keyword.toLowerCase())) {
-            specificMatches++;
-            console.log(`✅ Found keyword: ${keyword}`);
-          }
-        });
-
-        let generalMatches = 0;
-        generalIndicators.forEach((indicator) => {
-          if (detectedText.includes(indicator.toLowerCase())) {
-            generalMatches++;
-          }
-        });
-
-        // Relaxed validation criteria for OCR-based detection
-        const hasGeneralIndicators = generalMatches >= 1; // At least 1 general indicator
-        const hasSpecificKeywords = specificMatches >= 1; // At least 1 specific keyword
-        const hasSubstantialText = detectedText.length >= 10; // Reduced to 10 characters minimum
-
-        const isValid =
-          hasGeneralIndicators && hasSpecificKeywords && hasSubstantialText;
-
-        console.log(`📋 OCR Validation:`, {
-          general: `${generalMatches}/1+`,
-          specific: `${specificMatches}/1+`,
-          textLength: `${detectedText.length}/10+`,
-          result: isValid,
-        });
-
-        return isValid;
+        return validationResult.isValid;
       } catch (error) {
         console.log("❌ Text validation error:", error);
         return false;
       }
     },
-    []
+    [behaviorConfig.detection?.ocr?.minTextLength]
   );
 
   // OCR-based document detection
@@ -536,8 +380,8 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
       "worklet";
 
       try {
-        // Skip all detection if disabled
-        if (disableDetection) {
+        // Skip all detection if disabled or OCR validation is disabled
+        if (disableDetection || !enableOCRValidation) {
           return;
         }
 
@@ -639,7 +483,7 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         });
       }
     },
-    [docType, disableDetection]
+    [docType, disableDetection, enableOCRValidation]
   );
 
   // Helper functions removed - using simplified edge detection inline
@@ -653,6 +497,10 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
   const toggleFlash = useCallback(() => {
     setIsFlashEnabled(!isFlashEnabled);
   }, [isFlashEnabled]);
+
+  const getDocumentTypeLabel = React.useCallback(() => {
+    return getDocumentLabel(docType);
+  }, [getDocumentLabel, docType]);
 
   const handleCapture = useCallback(async () => {
     if (captureInProgress || !cameraRef.current || !isCameraReady) return;
@@ -680,12 +528,12 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
         : `file://${photo.path}`;
       console.log("📸 Photo captured successfully:", imagePath);
 
-      if (disableDetection) {
-        // Skip OCR validation when detection is disabled
-        console.log("📸 Detection disabled - directly capturing image");
+      if (disableDetection || !enableOCRValidation) {
+        // Skip OCR validation when detection is disabled or OCR validation is disabled
+        console.log("📸 OCR validation disabled - directly capturing image");
         onCapture(imagePath);
       } else {
-        // Perform OCR validation on the captured image (not on frame processing)
+        // Perform OCR validation on the captured image
         console.log("🔍 Starting post-capture OCR validation...");
         const ocrValid = await runOCRValidation(imagePath, docType);
 
@@ -693,9 +541,32 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
           console.log("✅ OCR validation passed - document confirmed");
           onCapture(imagePath);
         } else {
-          console.log("⚠️ OCR validation failed - still allowing capture");
-          // Still allow capture even if OCR fails (fallback to visual detection)
-          onCapture(imagePath);
+          console.log("❌ OCR validation failed - showing validation alert");
+          
+          // Show alert for validation failure
+          Alert.alert(
+            "Document Validation Failed",
+            `The captured image does not appear to be a valid ${getDocumentTypeLabel().toLowerCase()}. Please ensure the document is clearly visible and try again.`,
+            [
+              {
+                text: "Try Again",
+                style: "default",
+                onPress: () => {
+                  console.log("🔄 User chose to try again");
+                  // Just return to camera view, don't call onCapture
+                }
+              },
+              {
+                text: "Capture Anyway",
+                style: "destructive", 
+                onPress: () => {
+                  console.log("⚠️ User chose to capture despite validation failure");
+                  onCapture(imagePath);
+                }
+              }
+            ],
+            { cancelable: false }
+          );
         }
       }
     } catch (error) {
@@ -713,11 +584,10 @@ export const CustomCameraView: React.FC<CustomCameraViewProps> = ({
     isFlashEnabled,
     docType,
     runOCRValidation,
+    enableOCRValidation,
+    getDocumentTypeLabel,
+    disableDetection,
   ]);
-
-  const getDocumentTypeLabel = React.useCallback(() => {
-    return getDocumentLabel(docType);
-  }, [getDocumentLabel, docType]);
 
   const getDocumentInstructionText = React.useCallback(() => {
     return getInstructionText(docType);
