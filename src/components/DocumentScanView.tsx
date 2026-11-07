@@ -14,17 +14,17 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Defs, Mask, Rect } from 'react-native-svg';
-import {
-  Camera,
-  useCameraDevice,
-  useCameraPermission,
-  useFrameOutput,
-  usePhotoOutput,
-  type Frame,
-} from 'react-native-vision-camera';
+import { Camera, CommonResolutions, useFrameOutput, usePhotoOutput, type Frame } from 'react-native-vision-camera';
 import { scheduleOnRN } from 'react-native-worklets';
-import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { File } from 'expo-file-system';
 
+import { useCameraAccess } from '../hooks/useCameraAccess';
+import { documentTextRecognizer } from '../core/DocumentTextRecognizer';
+import { readIdentityDocument, type IdentityDocumentReading } from '../services/DocumentReader';
+import { cropToFile } from '../utils/cropToFile';
+import { GUIDE_RADIUS, cropForGuide, guideBox } from '../utils/guide';
+
+export { cropForGuide, guideBox } from '../utils/guide';
 import { detectDocumentWithOpenCV, frameToProcessingBuffer } from '../core/OpenCVFrameProcessor';
 import { useDocumentDetection, type DetectionUpdate } from '../hooks/useDocumentDetection';
 import { toFileUri } from '../utils/fileUri';
@@ -42,10 +42,22 @@ export interface DocumentScanResult {
   uri: string;
   /** The whole photo (file://) */
   originalUri: string;
+  /** What the `mrz` check read off the photo: valid, every check digit passed. Absent for the other checks */
+  reading?: IdentityDocumentReading;
 }
 
+/**
+ * What a photo taken on its own must hold to be handed back; under it the photo is dropped and the scan goes on:
+ * - `mrz`: a valid MRZ, every check digit passing (a passport's data page, an ID card's back). Nothing else passes,
+ *   and the photo is sure to be readable
+ * - `text`: lines of a document's text (`minTextLines`), for a side without an MRZ
+ * - `none`: the outline alone
+ */
+export type DocumentPhotoCheck = 'mrz' | 'text' | 'none';
+
 export interface DocumentScanError {
-  code: 'PERMISSION_DENIED' | 'NO_CAMERA' | 'CAPTURE_FAILED';
+  /** `CAMERA_FAILED`: the camera stopped on its own (in use by another app, a call, the system) */
+  code: 'PERMISSION_DENIED' | 'NO_CAMERA' | 'CAMERA_FAILED' | 'CAPTURE_FAILED';
   message: string;
 }
 
@@ -65,7 +77,19 @@ export interface DocumentScanViewProps {
   guideColor?: string;
   /** JPEG quality of the cropped photo (0-1). Default 0.9 */
   quality?: number;
+  /**
+   * What a photo taken on its own must hold to be handed back (see {@link DocumentPhotoCheck}). The manual shutter
+   * (`capture()`) is never checked. Default `mrz` for a passport, `text` otherwise
+   */
+  photoCheck?: DocumentPhotoCheck;
+  /** Lines of text the `text` check asks for: a document's, not a door or a screen with the same outline. Default 4 */
+  minTextLines?: number;
   onStatusChange?: (status: DocumentScanStatus) => void;
+  /**
+   * A photo taken on its own was dropped by the check, with how many in a row: after a few, the host can suggest the
+   * manual shutter (poor light, glare, a side the recognizer can't read)
+   */
+  onPhotoRejected?: (rejectedInARow: number) => void;
   onCapture: (result: DocumentScanResult) => void;
   onError?: (error: DocumentScanError) => void;
 }
@@ -79,59 +103,62 @@ export interface DocumentScanViewRef {
 // Constants
 // ============================================================================
 
+/**
+ * The multi-lens (virtual) back camera where the phone has one: like the system camera app, the phone then
+ * switches to the ultra-wide lens by itself to focus up close (the main lens can't focus nearer than ~20 cm on
+ * recent iPhones). Falls back to a dual or single lens.
+ */
+const DEVICE_FILTER = { physicalDevices: ['ultra-wide-angle', 'wide-angle', 'telephoto'] } as const;
+
 const FRAME_PROCESSING = {
-  FRAME_SKIP: 5,
+  /** Look for the document about 6 times a second, whatever the camera's frame rate (30 or 60 fps) */
+  INTERVAL_MS: 160,
   TARGET_RESOLUTION: { width: 1280, height: 720 },
   PROCESSING_LONG_SIDE: 480,
 };
 
-/** Width / height of the guide: ID-1 card (85.6 × 54 mm), passport page held upright (88 × 125 mm) */
-const GUIDE_RATIO = { card: 1.586, passport: 0.704 };
-/** Space between the guide and the viewport's edge */
-const GUIDE_INSET = 28;
-const GUIDE_RADIUS = 16;
-/** Extra room kept around the guide when cropping, for the preview and the photo framing differently */
-const CROP_MARGIN = 0.06;
+/** A line of a document: a word or a number of 3 characters at least, not a speck the recognizer read as a letter */
+const TEXT_LINE = /[A-Za-z0-9\u00C0-\u024F\u0600-\u06FF]{3,}/;
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-/** The guide inside a viewport of the given size */
-export function guideBox(viewWidth: number, viewHeight: number, docType: VerifiedDocType): Box {
-  const ratio = docType === 'passport' ? GUIDE_RATIO.passport : GUIDE_RATIO.card;
-  let width = viewWidth - GUIDE_INSET * 2;
-  let height = width / ratio;
-  if (height > viewHeight - GUIDE_INSET * 2) {
-    height = viewHeight - GUIDE_INSET * 2;
-    width = height * ratio;
+/** Deletes a photo the scan won't hand back: a dropped attempt would otherwise stay in the cache */
+function discard(...uris: string[]): void {
+  for (const uri of uris) {
+    try {
+      new File(uri).delete();
+    } catch {
+      // Already gone
+    }
   }
-  return { x: (viewWidth - width) / 2, y: (viewHeight - height) / 2, width, height };
 }
 
 /**
- * The guide, in the photo's pixels: the preview fills the viewport ("cover"), so the photo is scaled until it
- * covers the viewport and centred; the guide maps back through that, with a margin, kept inside the photo.
+ * Whether the photo holds a document's text, read on the device. An app built before the recognizer was added has no
+ * way to tell: its photo is taken as it is.
  */
-export function cropForGuide(photoWidth: number, photoHeight: number, viewWidth: number, viewHeight: number, guide: Box): Box {
-  const scale = Math.max(viewWidth / photoWidth, viewHeight / photoHeight);
-  const offsetX = (viewWidth - photoWidth * scale) / 2;
-  const offsetY = (viewHeight - photoHeight * scale) / 2;
-  const marginX = guide.width * CROP_MARGIN;
-  const marginY = guide.height * CROP_MARGIN;
-  const x = Math.max(0, (guide.x - marginX - offsetX) / scale);
-  const y = Math.max(0, (guide.y - marginY - offsetY) / scale);
-  const width = Math.min(photoWidth - x, (guide.width + marginX * 2) / scale);
-  const height = Math.min(photoHeight - y, (guide.height + marginY * 2) / scale);
-  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
+async function checkPhoto(
+  uri: string,
+  check: DocumentPhotoCheck,
+  minLines: number
+): Promise<{ passed: boolean; reading?: IdentityDocumentReading }> {
+  const recognizer = documentTextRecognizer();
+  if (check === 'none' || !recognizer) return { passed: true };
+  try {
+    if (check === 'mrz') {
+      const reading = await readIdentityDocument(uri);
+      return reading.isValid ? { passed: true, reading } : { passed: false };
+    }
+    const lines = await recognizer.recognize(uri);
+    return { passed: lines.filter((line) => TEXT_LINE.test(line.text)).length >= minLines };
+  } catch {
+    // The recognizer failed on this photo: not a document as far as this attempt can tell, the next one tries again
+    return { passed: false };
+  }
 }
+
 
 // ============================================================================
 // Component
@@ -147,7 +174,10 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
     accentColor = '#55D4C9',
     guideColor = '#FFFFFF',
     quality = 0.9,
+    photoCheck,
+    minTextLines = 4,
     onStatusChange,
+    onPhotoRejected,
     onCapture,
     onError,
   },
@@ -157,9 +187,16 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [captureInProgress, setCaptureInProgress] = useState(false);
 
-  const device = useCameraDevice('back');
-  const { hasPermission } = useCameraPermission();
-  const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality' });
+  const check: DocumentPhotoCheck = photoCheck ?? (docType === 'passport' ? 'mrz' : 'text');
+  const camera = useCameraAccess('back', isActive, { physicalDevices: [...DEVICE_FILTER.physicalDevices] });
+  const { device, hasPermission } = camera;
+  // A virtual device with an ultra-wide lens starts on it (zoom 1): its first switch factor is the main lens's view, the
+  // framing of a single camera. Without one (a wide + telephoto pair, iPhone 7 Plus to XS) that factor is the
+  // telephoto's: stay at 1, the main lens
+  const zoom = device?.physicalDevices.some((lens) => lens.type === 'ultra-wide-angle') ? device.zoomLensSwitchFactors[0] : undefined;
+  // About 11 MP (2880 × 3840) at most: sharp enough for an MRZ, without a 48 or 200 MP sensor's full photo to crop,
+  // read and send
+  const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality', targetResolution: CommonResolutions.UHD_4_3 });
 
   // Detection: a shape held steady is enough (the host reads the photo itself)
   const detectionConfig = useMemo(() => ({ requireOcrValidation: false }), []);
@@ -175,16 +212,25 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
     updateDetectionRef.current(detection);
   }, []);
 
+  const guide = useMemo(() => (size ? guideBox(size.width, size.height, docType) : null), [size, docType]);
+  // Plain numbers for the frame worklet
+  const viewWidth = size?.width ?? 0;
+  const viewHeight = size?.height ?? 0;
+  const guideWidth = guide?.width ?? 0;
+  const guideHeight = guide?.height ?? 0;
+
   const onFrame = useCallback(
     (frame: Frame) => {
       'worklet';
 
       try {
-        const runtime = globalThis as unknown as { __documentScanFrameCount?: number };
-        runtime.__documentScanFrameCount = ((runtime.__documentScanFrameCount ?? 0) + 1) % FRAME_PROCESSING.FRAME_SKIP;
-        if (runtime.__documentScanFrameCount !== 0) {
+        const runtime = globalThis as unknown as { __documentScanLastAt?: number };
+        const now = Date.now();
+        if (guideWidth === 0) return;
+        if (now - (runtime.__documentScanLastAt ?? 0) < FRAME_PROCESSING.INTERVAL_MS) {
           return;
         }
+        runtime.__documentScanLastAt = now;
         const processed = frameToProcessingBuffer(frame, FRAME_PROCESSING.PROCESSING_LONG_SIDE);
         if (processed === null) {
           return;
@@ -195,7 +241,13 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
           processed.height,
           frame.width,
           frame.height,
-          docType
+          docType,
+          {},
+          {
+            sideways: frame.orientation === 'left' || frame.orientation === 'right',
+            view: { width: viewWidth, height: viewHeight },
+            guide: { width: guideWidth, height: guideHeight },
+          }
         );
         scheduleOnRN(forwardDetection, {
           isDetected: detection.isDetected,
@@ -208,7 +260,7 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
         frame.dispose();
       }
     },
-    [docType, forwardDetection]
+    [docType, forwardDetection, guideHeight, guideWidth, viewHeight, viewWidth]
   );
 
   const frameOutput = useFrameOutput({
@@ -222,36 +274,65 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
     [autoCapture, photoOutput, frameOutput]
   );
 
-  const guide = useMemo(() => (size ? guideBox(size.width, size.height, docType) : null), [size, docType]);
+  // Callbacks read through refs: a photo taken just as the screen closes, or the camera pauses, is never handed back
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const activeRef = useRef(camera.isActive);
+  activeRef.current = camera.isActive;
+  const callbacksRef = useRef({ onCapture, onError, onPhotoRejected });
+  callbacksRef.current = { onCapture, onError, onPhotoRejected };
+  // One photo at a time, the manual shutter and the automatic one alike (the state lags a render behind)
+  const busyRef = useRef(false);
+  const rejectedRef = useRef(0);
 
-  const capture = useCallback(async () => {
-    if (captureInProgress || !isCameraReady || !size || !guide) return;
+  // Takes the photo; one taken on its own (`checked`) is handed back only if it holds what the document holds
+  const takePhoto = useCallback(async (checked: boolean) => {
+    if (busyRef.current || !isCameraReady || !size || !guide) return;
+    busyRef.current = true;
     setCaptureInProgress(true);
     onCaptureTriggered();
     try {
-      const photo = await photoOutput.capturePhotoToFile({ flashMode: 'off' }, {});
+      // An attempt the check may drop makes no sound: the host marks the photo it keeps (a haptic, a tick)
+      const photo = await photoOutput.capturePhotoToFile({ flashMode: 'off', enableShutterSound: !checked }, {});
       const originalUri = toFileUri(photo.filePath);
-      // Rendered with its EXIF orientation applied, so the crop is in what the customer saw
-      const image = await ImageManipulator.manipulate(originalUri).renderAsync();
-      const crop = cropForGuide(image.width, image.height, size.width, size.height, guide);
-      const cropped = await ImageManipulator.manipulate(originalUri)
-        .crop({ originX: crop.x, originY: crop.y, width: crop.width, height: crop.height })
-        .renderAsync();
-      const saved = await cropped.saveAsync({ compress: quality, format: SaveFormat.JPEG });
-      onCapture({ uri: saved.uri, originalUri });
+      const saved = await cropToFile(originalUri, (width, height) => cropForGuide(width, height, size.width, size.height, guide), quality);
+      const verdict = checked ? await checkPhoto(saved.uri, check, minTextLines) : { passed: true };
+      if (!mountedRef.current || !activeRef.current) {
+        discard(saved.uri, originalUri);
+        return;
+      }
+      if (!verdict.passed) {
+        // An outline like a document's, without what the document holds: keep looking, held steady again from the start
+        discard(saved.uri, originalUri);
+        rejectedRef.current += 1;
+        callbacksRef.current.onPhotoRejected?.(rejectedRef.current);
+        resetDetection();
+        return;
+      }
+      rejectedRef.current = 0;
+      callbacksRef.current.onCapture({ uri: saved.uri, originalUri, ...(verdict.reading ? { reading: verdict.reading } : {}) });
     } catch (error) {
-      onError?.({ code: 'CAPTURE_FAILED', message: error instanceof Error ? error.message : String(error) });
+      if (mountedRef.current && activeRef.current) {
+        callbacksRef.current.onError?.({ code: 'CAPTURE_FAILED', message: error instanceof Error ? error.message : String(error) });
+      }
       resetDetection();
     } finally {
-      setCaptureInProgress(false);
+      busyRef.current = false;
+      if (mountedRef.current) setCaptureInProgress(false);
     }
-  }, [captureInProgress, guide, isCameraReady, onCapture, onCaptureTriggered, onError, photoOutput, quality, resetDetection, size]);
+  }, [check, guide, isCameraReady, minTextLines, onCaptureTriggered, photoOutput, quality, resetDetection, size]);
 
+  const capture = useCallback(() => takePhoto(false), [takePhoto]);
   useImperativeHandle(ref, () => ({ capture }), [capture]);
 
   useEffect(() => {
-    if (shouldAutoCapture) void capture();
-  }, [shouldAutoCapture, capture]);
+    if (shouldAutoCapture) void takePhoto(true);
+  }, [shouldAutoCapture, takePhoto]);
 
   const status: DocumentScanStatus = !isCameraReady
     ? 'starting'
@@ -265,9 +346,9 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
   }, [status, onStatusChange]);
 
   useEffect(() => {
-    if (!hasPermission) onError?.({ code: 'PERMISSION_DENIED', message: 'Camera permission is not granted' });
-    else if (!device) onError?.({ code: 'NO_CAMERA', message: 'No back camera on this device' });
-  }, [device, hasPermission, onError]);
+    if (camera.problem === 'PERMISSION_DENIED') onError?.({ code: 'PERMISSION_DENIED', message: 'Camera permission is not granted' });
+    else if (camera.problem === 'NO_CAMERA') onError?.({ code: 'NO_CAMERA', message: 'No back camera on this device' });
+  }, [camera.problem, onError]);
 
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -282,12 +363,15 @@ export const DocumentScanView = forwardRef<DocumentScanViewRef, DocumentScanView
         <Camera
           style={StyleSheet.absoluteFill}
           device={device}
-          isActive={isActive}
+          isActive={camera.isActive}
           outputs={outputs}
+          zoom={zoom}
+          // Tap to focus, when the automatic focus picks the wrong thing
+          enableNativeTapToFocusGesture
           resizeMode="cover"
           onStarted={() => setIsCameraReady(true)}
           onStopped={() => setIsCameraReady(false)}
-          onError={(error) => onError?.({ code: 'NO_CAMERA', message: error.message })}
+          onError={(error) => onError?.({ code: 'CAMERA_FAILED', message: error.message })}
         />
       ) : null}
       {size && guide ? (

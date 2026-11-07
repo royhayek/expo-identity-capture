@@ -84,7 +84,7 @@ export interface UseDocumentDetectionReturn {
 /** Default detection configuration */
 const DEFAULT_CONFIG: DocumentDetectionConfig = {
   stableFramesRequired: 10,      // Need 10 consecutive good detections
-  stabilityThreshold: 150,       // Very generous - corners can move a lot
+  stabilityThreshold: 40,        // Average corner shift between processed frames, in frame pixels (about 3% of 1280)
   autoCaptureConfidence: 0.75,   // Require 75% confidence for shape detection
   autoCaptureDelay: 500,        // Wait 0.5 second after camera ready before detection starts
   captureHoldTime: 500,         // Hold document steady for 0.5 second after detection before OCR
@@ -96,6 +96,10 @@ const DEFAULT_CONFIG: DocumentDetectionConfig = {
 
 /** Debug logging */
 const DEBUG_LOGGING = __DEV__ ?? false;
+/** Development builds only: a release build logs nothing, on every processed frame least of all */
+const debugLog = (...args: unknown[]) => {
+  if (DEBUG_LOGGING) console.log(...args);
+};
 
 // ============================================================================
 // Hook Implementation
@@ -154,12 +158,12 @@ export function useDocumentDetection(
     }
 
     if (DEBUG_LOGGING) {
-      console.log('[Detection] Camera ready, starting auto-capture delay...');
+      debugLog('[Detection] Camera ready, starting auto-capture delay...');
     }
 
     const timeout = setTimeout(() => {
       if (DEBUG_LOGGING) {
-        console.log('[Detection] Auto-capture now enabled');
+        debugLog('[Detection] Auto-capture now enabled');
       }
       setIsAutoCaptureEnabled(true);
     }, cfg.autoCaptureDelay);
@@ -204,12 +208,12 @@ export function useDocumentDetection(
     // Record when detection started
     if (detectionStartTimeRef.current === null) {
       detectionStartTimeRef.current = Date.now();
-      console.log(`[Detection] Document detected, starting ${cfg.captureHoldTime}ms hold timer...`);
+      debugLog(`[Detection] Document detected, starting ${cfg.captureHoldTime}ms hold timer...`);
     }
 
     // Set timer to enable capture after hold time
     const holdTimeout = setTimeout(() => {
-      console.log(`[Detection] ✅ Hold time complete, capture ready`);
+      debugLog(`[Detection] ✅ Hold time complete, capture ready`);
       setIsCaptureReady(true);
     }, cfg.captureHoldTime);
 
@@ -226,7 +230,7 @@ export function useDocumentDetection(
     // Mark OCR as performed for this session
     ocrPerformedRef.current = true;
 
-    console.log(`[Detection] 📝 Requesting OCR validation (runs once)...`);
+    debugLog(`[Detection] 📝 Requesting OCR validation (runs once)...`);
     setShouldPerformOcrValidation(true);
     setOcrValidationState(prev => ({
       ...prev,
@@ -242,7 +246,7 @@ export function useDocumentDetection(
   // Determine if auto-capture should trigger
   useEffect(() => {
     if (DEBUG_LOGGING && isDocumentValid) {
-      console.log(`[Detection] Checking auto-capture conditions:`, {
+      debugLog(`[Detection] Checking auto-capture conditions:`, {
         isDocumentValid,
         isCaptureReady,
         disableDetection,
@@ -264,7 +268,7 @@ export function useDocumentDetection(
       !autoCaptureTriggeredRef.current;
 
     if (canAutoCapture) {
-      console.log(`[Detection] ✅ Auto-capture triggered!`);
+      debugLog(`[Detection] ✅ Auto-capture triggered!`);
       setShouldAutoCapture(true);
     }
   }, [
@@ -280,6 +284,18 @@ export function useDocumentDetection(
   /**
    * Updates detection state with stability tracking
    */
+  // The corners and confidence change on every processed frame: state only when a document appears or goes, not a
+  // re-render of the camera view six times a second for values the view doesn't draw
+  const shownCornersRef = useRef<DetectedDocumentCorners | null>(null);
+  const showDetection = useCallback((corners: DetectedDocumentCorners | null, confidence: number) => {
+    const appeared = (shownCornersRef.current === null) !== (corners === null);
+    shownCornersRef.current = corners;
+    if (appeared) {
+      setDetectedCorners(corners);
+      setDetectionConfidence(confidence);
+    }
+  }, []);
+
   const updateDetection = useCallback(
     (detection: DetectionUpdate) => {
       if (disableDetection) {
@@ -291,8 +307,7 @@ export function useDocumentDetection(
       if (!isAutoCaptureEnabled) {
         // Still show visual feedback but don't increment stability counter
         if (detection.isDetected && detection.corners) {
-          setDetectedCorners(detection.corners);
-          setDetectionConfidence(detection.confidence);
+          showDetection(detection.corners, detection.confidence);
         }
         return;
       }
@@ -301,46 +316,57 @@ export function useDocumentDetection(
         // Check if confidence is good enough
         const hasGoodConfidence = detection.confidence >= cfg.autoCaptureConfidence;
 
+        // Held steady: the corners stay where they were; a shape that jumps is a new one, its count starts over
+        const previous = previousCornersRef.current;
+        const corners = detection.corners;
+        const shift = previous
+          ? (['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).reduce(
+              (sum, corner) => sum + Math.hypot(corners[corner].x - previous[corner].x, corners[corner].y - previous[corner].y),
+              0
+            ) / 4
+          : 0;
+        if (shift > cfg.stabilityThreshold) {
+          stableDetectionCountRef.current = 0;
+          setIsShapeDetected(false);
+        }
+
         if (hasGoodConfidence) {
           // Only increment counter for good confidence detections
           stableDetectionCountRef.current += 1;
 
           // Update visual feedback
-          setDetectedCorners(detection.corners);
-          setDetectionConfidence(detection.confidence);
+          showDetection(detection.corners, detection.confidence);
           previousCornersRef.current = detection.corners;
 
           // Mark as fully detected after enough consecutive good detections
           const isStablyDetected = stableDetectionCountRef.current >= cfg.stableFramesRequired;
 
           // Log stability progress
-          console.log(`[Detection] Stability: ${stableDetectionCountRef.current}/${cfg.stableFramesRequired}, confidence=${detection.confidence.toFixed(2)}`);
+          debugLog(`[Detection] Stability: ${stableDetectionCountRef.current}/${cfg.stableFramesRequired}, confidence=${detection.confidence.toFixed(2)}`);
 
           if (isStablyDetected) {
             setIsShapeDetected(true);
           }
         } else {
           // Low confidence - reset stability counter, this is not a reliable detection
-          console.log(`[Detection] Low confidence ${detection.confidence.toFixed(2)} < ${cfg.autoCaptureConfidence}, resetting counter`);
+          debugLog(`[Detection] Low confidence ${detection.confidence.toFixed(2)} < ${cfg.autoCaptureConfidence}, resetting counter`);
           stableDetectionCountRef.current = 0;
           setIsShapeDetected(false);
           // Still show corners for visual feedback
-          setDetectedCorners(detection.corners);
-          setDetectionConfidence(detection.confidence);
+          showDetection(detection.corners, detection.confidence);
         }
       } else {
         // No detection - reset everything
         if (stableDetectionCountRef.current > 0 || previousCornersRef.current !== null) {
-          console.log(`[Detection] No detection, resetting`);
+          debugLog(`[Detection] No detection, resetting`);
           stableDetectionCountRef.current = 0;
           previousCornersRef.current = null;
           setIsShapeDetected(false);
-          setDetectedCorners(null);
-          setDetectionConfidence(0);
+          showDetection(null, 0);
         }
       }
     },
-    [disableDetection, isAutoCaptureEnabled, cfg.autoCaptureConfidence, cfg.stableFramesRequired]
+    [disableDetection, isAutoCaptureEnabled, cfg.autoCaptureConfidence, cfg.stableFramesRequired, cfg.stabilityThreshold, showDetection]
   );
 
   /**
@@ -349,6 +375,7 @@ export function useDocumentDetection(
   const resetDetection = useCallback(() => {
     stableDetectionCountRef.current = 0;
     previousCornersRef.current = null;
+    shownCornersRef.current = null;
     autoCaptureTriggeredRef.current = false;
     ocrValidationCountRef.current = 0;
     detectionStartTimeRef.current = null;
@@ -376,18 +403,18 @@ export function useDocumentDetection(
 
     if (isValid) {
       ocrValidationCountRef.current += 1;
-      console.log(`[Detection] ✅ OCR validation passed! Count: ${ocrValidationCountRef.current}/${cfg.ocrValidationsRequired}`);
+      debugLog(`[Detection] ✅ OCR validation passed! Count: ${ocrValidationCountRef.current}/${cfg.ocrValidationsRequired}`);
 
       // Mark document as valid (green indicator) when we have enough OCR validations
       if (ocrValidationCountRef.current >= cfg.ocrValidationsRequired) {
-        console.log(`[Detection] 🟢 Document is VALID - ready for capture!`);
+        debugLog(`[Detection] 🟢 Document is VALID - ready for capture!`);
         setIsDocumentValid(true);
       }
     } else {
       // Reset validation count on failure - document might have moved
       ocrValidationCountRef.current = 0;
       setIsDocumentValid(false);
-      console.log(`[Detection] ❌ OCR validation failed - not a valid document`);
+      debugLog(`[Detection] ❌ OCR validation failed - not a valid document`);
     }
 
     setOcrValidationState(prev => ({

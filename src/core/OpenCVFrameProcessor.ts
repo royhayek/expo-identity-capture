@@ -74,6 +74,13 @@ interface DetectionConfig {
   dilationKernelSize: number;
   /** Number of dilation iterations */
   dilationIterations: number;
+  /**
+   * How much of its rotated rectangle the outline fills (0-1): a card or a passport fills it even with rounded corners,
+   * a thumb over an edge or a booklet's curve; a blob of clutter doesn't
+   */
+  minRectangularity: number;
+  /** The furthest the width/height ratio may be from the document's (relative): further is not that document */
+  maxRatioError: number;
 }
 
 /** Expected aspect ratios for different document types */
@@ -95,6 +102,8 @@ const DEFAULT_CONFIG: DetectionConfig = {
   blurKernelSize: 5,
   dilationKernelSize: 3,
   dilationIterations: 2,        // More dilation to connect edge gaps
+  minRectangularity: 0.75,
+  maxRatioError: 0.3,
 };
 
 /**
@@ -128,7 +137,8 @@ const EMPTY_RESULT: DocumentDetectionResult = {
 };
 
 // Enable debug logging (set to false for production)
-const DEBUG_LOGGING = __DEV__ ?? false;
+// Every contour of every processed frame: too much even for development builds, turned on by hand to tune detection
+const DEBUG_LOGGING = false;
 
 // ============================================================================
 // Helper Functions
@@ -390,6 +400,51 @@ function isValidDocumentShape(
   return true;
 }
 
+/** The on-screen guide the frame's outlines must sit in: the frame's quarter turn, the view and the guide's size */
+export interface GuideFrame {
+  sideways: boolean;
+  view: { width: number; height: number };
+  guide: { width: number; height: number };
+}
+
+/** How far from the guide's centre a document may sit (share of the guide's size), and how large it may be against it */
+const GUIDE_FIT = { offset: 0.25, minArea: 0.45, maxArea: 1.6 };
+
+/**
+ * Whether a detected outline sits in the guide, as the customer sees it: the photo is cropped to the guide, so an
+ * outline elsewhere (or outside the visible part of the frame) would be taken, then dropped by the check, again and
+ * again. The frame's corners are in its stored orientation; a quarter turn only swaps the axes, so the test, symmetric
+ * about the centre, needs nothing else from the orientation.
+ */
+export function sitsInGuide(
+  corners: DetectedDocumentCorners,
+  frameWidth: number,
+  frameHeight: number,
+  { sideways, view, guide }: GuideFrame
+): boolean {
+  'worklet';
+  const uprightWidth = sideways ? frameHeight : frameWidth;
+  const uprightHeight = sideways ? frameWidth : frameHeight;
+  // The preview covers the view: the frame scaled up until it fills it, centred
+  const scale = Math.max(view.width / uprightWidth, view.height / uprightHeight);
+  const guideWidth = guide.width / scale;
+  const guideHeight = guide.height / scale;
+  const { topLeft, topRight, bottomLeft, bottomRight } = corners;
+  const centreX = (topLeft.x + topRight.x + bottomLeft.x + bottomRight.x) / 4 - frameWidth / 2;
+  const centreY = (topLeft.y + topRight.y + bottomLeft.y + bottomRight.y) / 4 - frameHeight / 2;
+  const offsetX = Math.abs(sideways ? centreY : centreX);
+  const offsetY = Math.abs(sideways ? centreX : centreY);
+  const area =
+    Math.hypot(topRight.x - topLeft.x, topRight.y - topLeft.y) * Math.hypot(bottomLeft.x - topLeft.x, bottomLeft.y - topLeft.y);
+  const ratio = area / (guideWidth * guideHeight);
+  return (
+    offsetX <= guideWidth * GUIDE_FIT.offset &&
+    offsetY <= guideHeight * GUIDE_FIT.offset &&
+    ratio >= GUIDE_FIT.minArea &&
+    ratio <= GUIDE_FIT.maxArea
+  );
+}
+
 // ============================================================================
 // Frame Conversion
 // ============================================================================
@@ -486,7 +541,8 @@ export function detectDocumentWithOpenCV(
   originalWidth: number,
   originalHeight: number,
   docType: VerifiedDocType,
-  config: Partial<DetectionConfig> = {}
+  config: Partial<DetectionConfig> = {},
+  guideFrame?: GuideFrame
 ): DocumentDetectionResult {
   'worklet';
 
@@ -549,7 +605,9 @@ export function detectDocumentWithOpenCV(
     OpenCV.findContours(
       dilated,
       contours,
-      RetrievalModes.RETR_EXTERNAL,
+      // Every outline, inner ones too: a card whose edge touches the table's or a hand's merges into one outer outline,
+      // its own outline is still there inside
+      RetrievalModes.RETR_LIST,
       ContourApproximationModes.CHAIN_APPROX_SIMPLE
     );
 
@@ -584,11 +642,17 @@ export function detectDocumentWithOpenCV(
         continue;
       }
 
-      // Get minimum area rotated rectangle (always produces 4 corners)
+      // Get minimum area rotated rectangle
       const rotatedRect = OpenCV.minAreaRect(contour);
 
       // Extract rotated rectangle properties (x/y is the centre)
       const { x: centerX, y: centerY, width: rectWidth, height: rectHeight, angle } = rotatedRect;
+
+      // A document fills its rectangle: a trapezoid of furniture or a shadow's corner doesn't. What it holds is checked
+      // on the photo (DocumentScanView): an MRZ, or a document's text
+      if (area / Math.max(1, rectWidth * rectHeight) < cfg.minRectangularity) {
+        continue;
+      }
 
       // Calculate corners from rotated rectangle
       const corners = getRotatedRectCorners(centerX, centerY, rectWidth, rectHeight, angle);
@@ -598,6 +662,11 @@ export function detectDocumentWithOpenCV(
       const orderedCorners = orderPoints(scaledCorners);
 
       // Validate the detected shape is a reasonable document
+      // Only an outline in the guide: the photo is cropped to it, and the largest outline (an open passport's two pages,
+      // the table) is not the document the customer placed there
+      if (guideFrame && !sitsInGuide(orderedCorners, originalWidth, originalHeight, guideFrame)) {
+        continue;
+      }
       if (!isValidDocumentShape(orderedCorners, originalWidth, originalHeight)) {
         if (DEBUG_LOGGING) {
           console.log(`[OpenCV] Contour ${i}: Invalid shape - skipping`);
@@ -608,6 +677,10 @@ export function detectDocumentWithOpenCV(
       // Calculate aspect ratio
       const aspectRatio = getContourAspectRatio(rectWidth, rectHeight, docType);
       const ratioError = Math.abs(aspectRatio - expectedRatio) / expectedRatio;
+      // Not the document's shape: a scored-down match is still a door or a screen
+      if (ratioError > cfg.maxRatioError) {
+        continue;
+      }
 
       // Calculate confidence score
       const areaRatio = area / frameArea;
