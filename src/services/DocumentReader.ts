@@ -1,15 +1,19 @@
 /**
  * Document Reader
  *
- * Reads an identity document photo on the device: ML Kit text recognition (Latin script, so the MRZ and
- * Latin fields), then the MRZ parser. Nothing leaves the phone.
+ * Reads an identity document photo on the device: the platform's text recognition (Apple Vision on iOS,
+ * ML Kit through Google Play services on Android), then the MRZ parser. Nothing leaves the phone.
  *
- * Requires the optional peer `react-native-vision-camera-mlkit` (with its text recognition enabled).
+ * Uses this package's own recognizer (DocumentTextRecognizer), set up for documents; in an app whose native code
+ * predates it, the optional peer `expo-text-extractor`.
  *
  * @module DocumentReader
  */
 
+import { documentTextRecognizer, rowsOf } from '../core/DocumentTextRecognizer';
 import { detectAndParseMRZ, type ParsedMRZ } from './MRZParser';
+
+import type { DocumentTextRecognizer, TextRegion } from '../core/DocumentTextRecognizer';
 
 // ============================================================================
 // Types
@@ -36,8 +40,16 @@ export interface IdentityDocumentReading {
   documentNumber: string | null;
   /** YYYY-MM-DD */
   dateOfExpiry: string | null;
-  /** Everything ML Kit recognised, for apps that read more fields themselves */
+  /** Everything the text recognition read, a line per row, for apps that read more fields themselves */
   text: string;
+}
+
+export interface ReadIdentityDocumentOptions {
+  /**
+   * Logs every line the OCR read and what the MRZ parser made of it, to map new document types. The lines are
+   * the document's personal data: turn it on in development builds only.
+   */
+  debug?: boolean;
 }
 
 export interface DocumentReaderError {
@@ -84,6 +96,38 @@ export function normalizeMrzCountry(code: string | null | undefined): string | n
 }
 
 /** Builds a reading from recognised text (exported for testing and for apps with their own OCR) */
+/**
+ * The '<<' between surname and given names misread as '<' and a letter ("EL<HAYEK<CROY" for "EL<HAYEK<<ROY"): the names
+ * line has no check digit, so the printed names on the page decide. With no given names read, the first surname word
+ * after the first that isn't printed, but is once its first letter goes, starts the given names.
+ */
+function splitMisreadNames(
+  surname: string | null,
+  givenNames: string | null,
+  text: string
+): { surname: string | null; givenNames: string | null } {
+  if (!surname || givenNames) return { surname, givenNames };
+  // The words printed on the page, the MRZ lines themselves left out
+  const printed = new Set(
+    text
+      .split('\n')
+      .filter((line) => !line.includes('<'))
+      .join(' ')
+      .toUpperCase()
+      .split(/[^A-Z]+/)
+      .filter(Boolean)
+  );
+  const words = surname.split(' ');
+  const at = words.findIndex(
+    (word, index) => index > 0 && word.length > 2 && !printed.has(word) && printed.has(word.slice(1))
+  );
+  if (at < 0) return { surname, givenNames };
+  return {
+    surname: words.slice(0, at).join(' '),
+    givenNames: [words[at].slice(1), ...words.slice(at + 1)].join(' '),
+  };
+}
+
 export function readingFromText(text: string): IdentityDocumentReading {
   const detection = detectAndParseMRZ(text);
   const mrz = detection.found ? detection.parsed ?? null : null;
@@ -91,13 +135,14 @@ export function readingFromText(text: string): IdentityDocumentReading {
     return { ...EMPTY_READING, mrz, text };
   }
   const clean = (value: string | undefined) => (value ? value.replace(/</g, ' ').replace(/\s+/g, ' ').trim() || null : null);
+  const names = splitMisreadNames(clean(mrz.surname), clean(mrz.givenNames), text);
   return {
     isValid: true,
     mrz,
     issuingCountry: normalizeMrzCountry(mrz.issuingCountry),
     nationality: normalizeMrzCountry(mrz.nationality),
-    surname: clean(mrz.surname),
-    givenNames: clean(mrz.givenNames),
+    surname: names.surname,
+    givenNames: names.givenNames,
     dateOfBirth: mrz.dateOfBirth || null,
     sex: mrz.sex === 'M' || mrz.sex === 'F' ? mrz.sex : null,
     documentNumber: clean(mrz.documentNumber),
@@ -118,19 +163,64 @@ export function readingFromText(text: string): IdentityDocumentReading {
  *
  * @param imageUri - file:// URI of the photo (the cropped capture works best)
  */
-export async function readIdentityDocument(imageUri: string): Promise<IdentityDocumentReading> {
-  let mlkit: typeof import('react-native-vision-camera-mlkit');
+export async function readIdentityDocument(
+  imageUri: string,
+  { debug = false }: ReadIdentityDocumentOptions = {}
+): Promise<IdentityDocumentReading> {
+  const recognizer = documentTextRecognizer();
+  const { reading, engine, pass } = recognizer
+    ? await readNatively(recognizer, imageUri)
+    : { reading: await readWithTextExtractor(imageUri), engine: 'expo-text-extractor', pass: 'whole photo' };
+  if (debug) {
+    const { text, mrz, ...fields } = reading;
+    console.log(
+      '[OCR] reading',
+      JSON.stringify(
+        { imageUri, engine, pass, lines: text.split('\n'), mrzFound: mrz !== null, mrzLines: mrz?.raw.split('\n') ?? [], ...fields },
+        null,
+        2
+      )
+    );
+  }
+  return reading;
+}
+
+/** Where an MRZ sits on a document filling the photo: its bottom part (a passport's data page, an ID card's back) */
+const MRZ_BAND: TextRegion = { x: 0, y: 0.5, width: 1, height: 0.5 };
+
+/**
+ * The whole photo first; without a valid MRZ, its bottom band again, read at a higher resolution, with the photo's
+ * printed lines kept (they settle a name split the MRZ misread).
+ */
+async function readNatively(recognizer: DocumentTextRecognizer, imageUri: string) {
   try {
-    mlkit = require('react-native-vision-camera-mlkit');
+    const rows = rowsOf(await recognizer.recognize(imageUri));
+    const whole = readingFromText(rows.join('\n'));
+    if (whole.isValid) return { reading: whole, engine: 'native', pass: 'whole photo' };
+    const band = rowsOf(await recognizer.recognize(imageUri, MRZ_BAND));
+    const printed = rows.filter((row) => !row.includes('<'));
+    const banded = readingFromText([...printed, ...band].join('\n'));
+    return { reading: banded.isValid || banded.mrz ? banded : whole, engine: 'native', pass: 'whole photo, then the MRZ band' };
+  } catch (error) {
+    throw { code: 'OCR_FAILED', message: error instanceof Error ? error.message : String(error) } as DocumentReaderError;
+  }
+}
+
+/** The fallback for a build without this package's recognizer */
+async function readWithTextExtractor(imageUri: string): Promise<IdentityDocumentReading> {
+  let textExtractor: typeof import('expo-text-extractor');
+  try {
+    textExtractor = require('expo-text-extractor');
   } catch {
-    throw { code: 'OCR_UNAVAILABLE', message: 'react-native-vision-camera-mlkit is not installed' } as DocumentReaderError;
+    throw { code: 'OCR_UNAVAILABLE', message: 'expo-text-extractor is not installed' } as DocumentReaderError;
   }
-  if (!mlkit.isFeatureAvailable(mlkit.MLKIT_FEATURE_KEYS.TEXT_RECOGNITION)) {
-    throw { code: 'OCR_UNAVAILABLE', message: 'ML Kit text recognition is not enabled in this build' } as DocumentReaderError;
+  if (!textExtractor.isSupported) {
+    throw { code: 'OCR_UNAVAILABLE', message: 'Text recognition is not supported on this device' } as DocumentReaderError;
   }
   try {
-    const result = await mlkit.processImageTextRecognition(imageUri, { language: 'LATIN' });
-    return readingFromText(result.text);
+    // A string per recognised line (iOS) or block (Android): the MRZ parser reads them one row each
+    const lines = await textExtractor.extractTextFromImage(imageUri);
+    return readingFromText(lines.join('\n'));
   } catch (error) {
     throw { code: 'OCR_FAILED', message: error instanceof Error ? error.message : String(error) } as DocumentReaderError;
   }

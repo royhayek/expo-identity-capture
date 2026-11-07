@@ -152,7 +152,7 @@ export function calculateCheckDigit(data: string): number {
     const value = CHAR_VALUES[char];
 
     if (value === undefined) {
-      console.warn(`[MRZ] Invalid character in check digit calculation: '${char}'`);
+      if (__DEV__) console.warn(`[MRZ] Invalid character in check digit calculation: '${char}'`);
       return -1;
     }
 
@@ -226,24 +226,50 @@ function isMRZLine(line: string): boolean {
   return len === 30 || len === 36 || len === 44;
 }
 
+/** The MRZ line lengths (ICAO 9303): TD3 passports, TD2 and TD1 cards */
+const MRZ_LENGTHS = [44, 36, 30];
+
+/**
+ * A line ending in a run of filler, off the length the document's other MRZ lines have: recognizers drop or miscount a
+ * long run of '<' (it reads as one shape), most often at the end of a names line, where it can be half the line. Only
+ * that trailing filler is added or trimmed, so every field keeps its position; the check digits still guard what they
+ * cover.
+ */
+function fitTrailingFiller(line: string, length: number): string {
+  if (line.length < length) return line + '<'.repeat(length - line.length);
+  // Longer: only filler may go
+  return /^<+$/.test(line.slice(length)) ? line.slice(0, length) : line;
+}
+
+/**
+ * Whether a cleaned line is an MRZ line whose trailing filler was miscounted: MRZ characters only, ending in filler, at
+ * least half the length, and next to a well-read line of the document's MRZ
+ */
+function isMisreadFillerLine(lines: readonly string[], index: number, length: number): boolean {
+  const line = lines[index];
+  const besideWellRead = [lines[index - 1], lines[index + 1]].some(
+    (neighbour) => neighbour !== undefined && neighbour.length === length && isMRZLine(neighbour)
+  );
+  return /^[A-Z0-9<]+$/.test(line) && line.endsWith('<<') && line.length >= length / 2 && besideWellRead;
+}
+
 /**
  * Extract potential MRZ lines from OCR text
  */
 function extractMRZLines(text: string): string[] {
   const lines = text.split(/\n/).map(l => l.trim()).filter(l => l.length > 0);
-  const mrzLines: string[] = [];
-
-  for (const line of lines) {
-    // Clean the line; look-alike characters are repaired per field once the format is known (repairMRZLines)
-    const cleanLine = line.replace(/\s/g, '').toUpperCase();
-
-    // Check if it looks like MRZ
-    if (isMRZLine(cleanLine)) {
-      mrzLines.push(cleanLine);
-    }
-  }
-
-  return mrzLines;
+  // Clean each line; look-alike characters are repaired per field once the format is known (repairMRZLines)
+  // '«' and '‹' are how some recognizers print a run of '<'
+  const cleaned = lines.map((line) => line.replace(/\s/g, '').replace(/«/g, '<<').replace(/‹/g, '<').toUpperCase());
+  const exact = cleaned.filter(isMRZLine);
+  // The length the document's well-read lines agree on: a line whose filler OCR miscounted is brought to it
+  const length = MRZ_LENGTHS.find((candidate) => exact.some((line) => line.length === candidate));
+  if (!length) return exact;
+  return cleaned
+    .map((line, index) =>
+      line.length !== length && isMisreadFillerLine(cleaned, index, length) ? fitTrailingFiller(line, length) : line
+    )
+    .filter((line) => isMRZLine(line) && line.length === length);
 }
 
 /**
@@ -313,11 +339,66 @@ function repairMRZLines(lines: string[], type: MRZType): string[] {
 // MRZ Parsing
 // ============================================================================
 
+/** Look-alikes OCR swaps in a field of letters and digits both (a document number) */
+const LOOK_ALIKES: Record<string, string[]> = {
+  O: ['0'], Q: ['0'], D: ['0'], '0': ['O', 'D'], I: ['1'], L: ['1'], '1': ['I'], Z: ['2'], '2': ['Z'],
+  S: ['5'], '5': ['S'], G: ['6'], '6': ['G'], B: ['8'], '8': ['B'],
+};
+
+/** The fields of letters and digits both, each with its check digit: [row, start, end (excluded), check position] */
+const CHECKED_MIXED_FIELDS: Record<MRZType, [number, number, number, number][]> = {
+  TD3: [[1, 0, 9, 9], [1, 28, 42, 42]],
+  TD2: [[1, 0, 9, 9]],
+  TD1: [[0, 5, 14, 14]],
+};
+
+/**
+ * A document number read with a look-alike ("O" for "0") fails its check digit, and its template can't say which it
+ * should be (both are allowed). Each single look-alike swap is tried; only when exactly one makes the check digit pass
+ * is it kept, so a field is never "repaired" into a guess. The composite check digit still guards the result.
+ */
+function repairByCheckDigits(lines: string[], type: MRZType): string[] {
+  const repaired = [...lines];
+  for (const [row, start, end, checkAt] of CHECKED_MIXED_FIELDS[type]) {
+    const line = repaired[row];
+    if (!line || line.length <= checkAt) continue;
+    const field = line.substring(start, end);
+    const check = line[checkAt];
+    if (/^<+$/.test(field) || validateCheckDigit(field, check)) continue;
+    const candidates = field.split('').flatMap((char, index) =>
+      (LOOK_ALIKES[char] ?? [])
+        .map((swap) => field.substring(0, index) + swap + field.substring(index + 1))
+        .filter((candidate) => validateCheckDigit(candidate, check))
+    );
+    if (candidates.length === 1) {
+      repaired[row] = line.substring(0, start) + candidates[0] + line.substring(end);
+    }
+  }
+  return repaired;
+}
+
+/** The names lines of each format (no check digit), where a '<' of the trailing filler can be read as 'K' */
+const NAME_ROWS: Record<MRZType, number[]> = { TD3: [0], TD2: [0], TD1: [2] };
+
+/**
+ * '<' read as 'K' inside the filler that ends a names line ("ROY<<<K<<<<"): only a K with filler before it and at least
+ * two '<' after it, in the run of filler that ends the line, so a name ending in K ("ERIK<<<") is never touched.
+ */
+function repairFillerK(lines: string[], type: MRZType): string[] {
+  return lines.map((line, row) => {
+    if (!NAME_ROWS[type].includes(row)) return line;
+    const tail = /<[<K]*$/.exec(line);
+    if (!tail) return line;
+    const fixed = tail[0].replace(/K(?=<<)/g, '<');
+    return line.substring(0, tail.index) + fixed;
+  });
+}
+
 /**
  * Parse date from MRZ format (YYMMDD) to ISO format (YYYY-MM-DD)
- * Handles century determination (00-30 = 2000s, 31-99 = 1900s)
+ * The century from today: a birth date is never ahead of it, an expiry at most 20 years ahead
  */
-function parseMRZDate(yymmdd: string): string {
+function parseMRZDate(yymmdd: string, kind: 'birth' | 'expiry'): string {
   if (yymmdd.length !== 6 || yymmdd === '<<<<<<') {
     return '';
   }
@@ -326,9 +407,12 @@ function parseMRZDate(yymmdd: string): string {
   const mm = yymmdd.substring(2, 4);
   const dd = yymmdd.substring(4, 6);
 
-  // Determine century: dates 00-30 are 2000s, 31-99 are 1900s
-  const century = yy <= 30 ? 2000 : 1900;
-  const yyyy = century + yy;
+  // The century the MRZ leaves out, from today: a birth date is never in the future, an expiry at most 20 years ahead
+  // (a passport is valid 10 at most) and never more than 80 behind
+  const currentYear = new Date().getFullYear();
+  const pivot = kind === 'birth' ? currentYear % 100 : (currentYear + 20) % 100;
+  const century = Math.floor((kind === 'birth' ? currentYear : currentYear + 20) / 100) * 100;
+  const yyyy = yy <= pivot ? century + yy : century - 100 + yy;
 
   return `${yyyy}-${mm}-${dd}`;
 }
@@ -432,10 +516,10 @@ function parseTD3(lines: string[]): ParsedMRZ {
     fullName,
     documentNumber,
     nationality,
-    dateOfBirth: parseMRZDate(dateOfBirthRaw),
+    dateOfBirth: parseMRZDate(dateOfBirthRaw, 'birth'),
     dateOfBirthRaw,
     sex,
-    dateOfExpiry: parseMRZDate(dateOfExpiryRaw),
+    dateOfExpiry: parseMRZDate(dateOfExpiryRaw, 'expiry'),
     dateOfExpiryRaw,
     personalNumber,
     checkDigits,
@@ -504,10 +588,10 @@ function parseTD2(lines: string[]): ParsedMRZ {
     fullName,
     documentNumber,
     nationality,
-    dateOfBirth: parseMRZDate(dateOfBirthRaw),
+    dateOfBirth: parseMRZDate(dateOfBirthRaw, 'birth'),
     dateOfBirthRaw,
     sex,
-    dateOfExpiry: parseMRZDate(dateOfExpiryRaw),
+    dateOfExpiry: parseMRZDate(dateOfExpiryRaw, 'expiry'),
     dateOfExpiryRaw,
     optionalData1,
     checkDigits,
@@ -582,10 +666,10 @@ function parseTD1(lines: string[]): ParsedMRZ {
     fullName,
     documentNumber,
     nationality,
-    dateOfBirth: parseMRZDate(dateOfBirthRaw),
+    dateOfBirth: parseMRZDate(dateOfBirthRaw, 'birth'),
     dateOfBirthRaw,
     sex,
-    dateOfExpiry: parseMRZDate(dateOfExpiryRaw),
+    dateOfExpiry: parseMRZDate(dateOfExpiryRaw, 'expiry'),
     dateOfExpiryRaw,
     optionalData1,
     optionalData2,
@@ -607,11 +691,9 @@ function parseTD1(lines: string[]): ParsedMRZ {
  */
 export function detectAndParseMRZ(ocrText: string): MRZDetectionResult {
   try {
-    console.log('[MRZ] Starting MRZ detection...');
 
     // Extract potential MRZ lines
     const mrzLines = extractMRZLines(ocrText);
-    console.log(`[MRZ] Found ${mrzLines.length} potential MRZ lines`);
 
     if (mrzLines.length < 2) {
       // Try more aggressive detection
@@ -619,7 +701,6 @@ export function detectAndParseMRZ(ocrText: string): MRZDetectionResult {
       if (aggressiveLines.length >= 2) {
         mrzLines.length = 0;
         mrzLines.push(...aggressiveLines);
-        console.log(`[MRZ] Aggressive detection found ${mrzLines.length} lines`);
       }
     }
 
@@ -640,11 +721,9 @@ export function detectAndParseMRZ(ocrText: string): MRZDetectionResult {
       };
     }
 
-    console.log(`[MRZ] Detected MRZ type: ${mrzType}`);
-    console.log(`[MRZ] Lines:\n${mrzLines.join('\n')}`);
 
     // Parse based on type
-    const repaired = repairMRZLines(mrzLines, mrzType);
+    const repaired = repairByCheckDigits(repairFillerK(repairMRZLines(mrzLines, mrzType), mrzType), mrzType);
     let parsed: ParsedMRZ;
     switch (mrzType) {
       case 'TD3':
@@ -658,16 +737,8 @@ export function detectAndParseMRZ(ocrText: string): MRZDetectionResult {
         break;
     }
 
-    console.log(`[MRZ] Parsed successfully:`, {
-      type: parsed.type,
-      name: parsed.fullName,
-      documentNumber: parsed.documentNumber,
-      nationality: parsed.nationality,
-      dob: parsed.dateOfBirth,
-      expiry: parsed.dateOfExpiry,
-      isValid: parsed.isValid,
-      confidence: `${(parsed.confidence * 100).toFixed(0)}%`,
-    });
+    // Never the lines or the fields: they are the holder's personal data. The type and the checks only, in development
+    if (__DEV__) console.log(`[MRZ] ${parsed.type}: ${parsed.isValid ? 'valid' : 'check digits failed'}`);
 
     return {
       found: true,
@@ -678,7 +749,7 @@ export function detectAndParseMRZ(ocrText: string): MRZDetectionResult {
 
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[MRZ] Detection error:', message);
+    if (__DEV__) console.warn('[MRZ] Detection error:', message);
     return {
       found: false,
       error: `MRZ detection failed: ${message}`,
