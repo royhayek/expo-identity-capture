@@ -6,7 +6,7 @@ import {
   DocumentTemplate,
   OcrField,
 } from "../types/extraction";
-import MLKit from "@react-native-ml-kit/text-recognition";
+import { recognizeText, getCloudVisionConfig, CloudVisionResponse } from "../services/CloudVisionOCR";
 import DocumentScanner, {
   ResponseType,
 } from "react-native-document-scanner-plugin";
@@ -300,27 +300,35 @@ export class DocumentExtractor {
 
     let text = "";
     let confidence = 0;
+    let ocrResult: CloudVisionResponse | null = null;
 
     try {
-      // Configure ML Kit based on document type
+      // Check if Cloud Vision is configured
+      if (!getCloudVisionConfig()) {
+        console.warn("⚠️ Cloud Vision not configured, OCR will be skipped");
+        throw new Error("Cloud Vision API not configured");
+      }
+
+      // Configure language hints based on document type
       const isArabicDocument =
-        docTypeHint === "civil_id" || docTypeHint === "army_card";
+        docTypeHint === "civil_id" || docTypeHint === "army_card" || docTypeHint === "residence_permit";
+
+      // Use appropriate language hints for the document type
+      const languageHints = isArabicDocument ? ['ar', 'en', 'fr'] : ['en', 'fr', 'ar'];
 
       console.log(
-        `📱 Attempting ML Kit text recognition (${
+        `☁️ Attempting Cloud Vision text recognition (${
           isArabicDocument ? "Arabic-optimized" : "standard"
         })...`
       );
 
-      // Configure ML Kit for better Arabic recognition
-      // Note: While ML Kit doesn't have explicit Arabic language hints in the current API,
-      // we can still optimize for Arabic documents
-      console.log(`📱 Configuring ML Kit for ${isArabicDocument ? 'Arabic' : 'Latin'} text...`);
-      
-      const result = await MLKit.recognize(imageUri);
-      text = result.text || "";
-      
-      console.log(`🔤 Raw ML Kit text (${text.length} chars):`, text.substring(0, 200));
+      console.log(`☁️ Using language hints: ${languageHints.join(', ')}`);
+
+      ocrResult = await recognizeText(imageUri, languageHints);
+      text = ocrResult.text || "";
+
+      console.log(`🔤 Raw Cloud Vision text (${text.length} chars):`, text.substring(0, 200));
+      console.log(`🌐 Detected languages: ${ocrResult.detectedLanguages.join(', ')}`);
 
       // Apply Arabic-specific preprocessing if needed
       if (isArabicDocument) {
@@ -331,56 +339,43 @@ export class DocumentExtractor {
       }
 
       // Calculate confidence based on text quality and document type
-      confidence = this.calculateTextConfidence(text, result, isArabicDocument);
+      confidence = this.calculateCloudVisionConfidence(text, ocrResult, isArabicDocument);
 
       console.log(
-        `📊 ML Kit results: ${
+        `📊 Cloud Vision results: ${
           text.length
         } chars, confidence: ${confidence.toFixed(2)}`
       );
 
-      // Log detailed ML Kit results with Arabic context
-      if (result.blocks && result.blocks.length > 0) {
-        console.log(`📝 Found ${result.blocks.length} text blocks:`);
-        result.blocks.forEach((block, i) => {
-          const blockText = block.text || "";
+      // Log detailed Cloud Vision results
+      if (ocrResult.annotations && ocrResult.annotations.length > 1) {
+        console.log(`📝 Found ${ocrResult.annotations.length - 1} text blocks:`);
+        ocrResult.annotations.slice(1, 10).forEach((annotation, i) => {
+          const blockText = annotation.text || "";
           const hasArabic = /[\u0600-\u06FF]/.test(blockText);
           console.log(
-            `   Block ${i + 1}: "${blockText}" (${
+            `   Block ${i + 1}: "${blockText.substring(0, 50)}${blockText.length > 50 ? '...' : ''}" (${
               hasArabic ? "Arabic" : "Latin"
-            }, ${block.cornerPoints ? "positioned" : "no position"})`
+            })`
           );
         });
       }
-    } catch (error) {
-      console.warn("⚠️ ML Kit failed, trying fallbacks:", error);
+    } catch (error: any) {
+      console.warn("⚠️ Cloud Vision failed:", error?.message || error);
 
-      // Try alternative OCR if available
+      // Try fallback OCR processor if available
       try {
         const { OCRProcessor } = require("../utils/ocrProcessor");
-        const ocrResult = await OCRProcessor.extractText(imageUri, {
-          language:
-            docTypeHint === "civil_id" || docTypeHint === "army_card"
-              ? "ar"
-              : "en",
+        const fallbackResult = await OCRProcessor.extractText(imageUri, {
+          languageHints: ['ar', 'en', 'fr'],
           enableOCR: true,
         });
-        text = ocrResult.text;
-        confidence = 0.7; // Default confidence for fallback
+        text = fallbackResult.text;
+        confidence = fallbackResult.confidence || 0.7;
         console.log(`📊 Fallback OCR results: ${text.length} chars`);
       } catch (fallbackError) {
         console.error("❌ All OCR methods failed:", fallbackError);
-        
-        // Provide specific guidance for Arabic documents
-        if (docTypeHint === "civil_id" || docTypeHint === "army_card") {
-          console.error("💡 Consider using Arabic-optimized OCR engines like:");
-          console.error("  • Google Cloud Vision API with Arabic language hints");
-          console.error("  • Azure Cognitive Services OCR with Arabic support");
-          console.error("  • AWS Textract with Arabic language support");
-          throw new Error("ML Kit has limited Arabic script support. Consider alternative OCR engines for better Arabic text recognition.");
-        }
-        
-        throw new Error("No OCR engine available");
+        throw new Error("OCR extraction failed - ensure Cloud Vision API is configured");
       }
     }
 
@@ -595,6 +590,57 @@ export class DocumentExtractor {
         .length;
       const qualityRatio = alphanumericChars / Math.max(text.length, 1);
       confidence += qualityRatio * 0.3;
+    }
+
+    return Math.min(confidence, 1.0);
+  }
+
+  /**
+   * Calculate text confidence based on Cloud Vision results
+   */
+  private static calculateCloudVisionConfidence(
+    text: string,
+    result: CloudVisionResponse,
+    isArabicDocument: boolean = false
+  ): number {
+    let confidence = 0.5; // Base confidence
+
+    // Text length factor
+    if (text.length > 100) confidence += 0.2;
+    else if (text.length > 50) confidence += 0.1;
+
+    // Annotations structure factor
+    if (result.annotations && result.annotations.length > 1) {
+      confidence += Math.min((result.annotations.length - 1) * 0.03, 0.15);
+    }
+
+    // Language detection factor
+    if (result.detectedLanguages && result.detectedLanguages.length > 0) {
+      confidence += 0.1;
+    }
+
+    // Text quality factor with Arabic-specific logic
+    if (isArabicDocument) {
+      // For Arabic documents, count Arabic characters and numbers
+      const arabicChars = (text.match(/[\u0600-\u06FF\u0660-\u0669]/g) || []).length;
+      const latinChars = (text.match(/[a-zA-Z0-9]/g) || []).length;
+      const totalValidChars = arabicChars + latinChars;
+      const qualityRatio = totalValidChars / Math.max(text.length, 1);
+
+      // Boost confidence if we have good Arabic text density
+      confidence += qualityRatio * 0.25;
+
+      // Additional boost if Arabic content is substantial
+      if (arabicChars > 20) confidence += 0.1;
+
+      console.log(
+        `🔤 Arabic text analysis: ${arabicChars} Arabic chars, ${latinChars} Latin chars, quality ratio: ${qualityRatio.toFixed(2)}`
+      );
+    } else {
+      // Standard alphanumeric ratio for non-Arabic documents
+      const alphanumericChars = (text.match(/[a-zA-Z0-9\u0600-\u06FF]/g) || []).length;
+      const qualityRatio = alphanumericChars / Math.max(text.length, 1);
+      confidence += qualityRatio * 0.25;
     }
 
     return Math.min(confidence, 1.0);

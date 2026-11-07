@@ -13,7 +13,8 @@ A comprehensive, production-ready package for capturing and extracting data from
 npm install expo-identity-capture
 
 # Install peer dependencies
-npx expo install expo-camera expo-image-manipulator expo-image-picker @react-native-ml-kit/text-recognition react-native-document-scanner-plugin react-native-vision-camera
+npx expo install expo-camera expo-file-system expo-image-manipulator react-native-svg react-native-worklets react-native-nitro-modules
+npm install react-native-vision-camera react-native-vision-camera-worklets react-native-nitro-image react-native-fast-opencv react-native-document-scanner-plugin
 
 # Basic usage
 import { IdentityCapture, IdentityCaptureProvider } from 'expo-identity-capture';
@@ -91,16 +92,38 @@ npm install expo-identity-capture
 
 ### Step 2: Install Peer Dependencies
 
+Version 2 targets the New Architecture only: Expo SDK 57+, React Native 0.85+, React 19.2+.
+
 ```bash
-# Core Expo dependencies
-npx expo install expo-camera expo-image-manipulator expo-image-picker
+# Expo modules (versions matched to your SDK)
+npx expo install expo-camera expo-file-system expo-image-manipulator react-native-svg
 
-# ML and Vision dependencies
-npm install @react-native-ml-kit/text-recognition react-native-document-scanner-plugin react-native-vision-camera
+# Worklets and Nitro (already present if you use Reanimated 4 / other Nitro modules)
+npx expo install react-native-worklets react-native-nitro-modules
 
-# Optional: Additional processing dependencies
-npm install react-native-svg react-native-size-matters react-native-worklets-core
+# Camera, frame processing and document scanning
+npm install react-native-vision-camera react-native-vision-camera-worklets react-native-nitro-image \
+  react-native-fast-opencv react-native-document-scanner-plugin
 ```
+
+| Peer | Version |
+| --- | --- |
+| `react-native-vision-camera`, `react-native-vision-camera-worklets` | `>=5.2.4` |
+| `react-native-nitro-modules` / `react-native-nitro-image` | `>=0.37.0` / `>=0.15.2` |
+| `react-native-worklets` | `>=0.10.0` |
+| `react-native-fast-opencv` | `>=1.0.1` |
+| `react-native-document-scanner-plugin` | `>=2.0.4` |
+
+`babel-preset-expo` adds the `react-native-worklets` Babel plugin on its own when the package is installed; outside
+Expo, add `react-native-worklets/plugin` to your Babel config.
+
+#### Upgrading from 1.x
+
+- `react-native-worklets-core` and `vision-camera-resize-plugin` are no longer used: remove them (two worklet runtimes
+  in one app conflict). Frame processing runs on VisionCamera 5's `useFrameOutput` and `react-native-worklets`.
+- `react-native-fast-opencv` moved from a dependency to a peer, at 1.x (its object API replaced `createObject`/`invoke`).
+- `DocumentScanner` is now the plugin's default export: call `DocumentScanner.scanDocument(...)` directly.
+- `LivenessDetection` is unchanged; `scoreLiveness(buffer, width, height)` is the same check as a plain worklet.
 
 ### Step 3: Configure Expo Project
 
@@ -119,16 +142,11 @@ Add to your `app.json` or `app.config.js`:
     ],
     "ios": {
       "infoPlist": {
-        "NSCameraUsageDescription": "Camera access is required to capture identity documents and selfies for verification.",
-        "NSPhotoLibraryUsageDescription": "Photo library access is required to save captured documents."
+        "NSCameraUsageDescription": "Camera access is required to capture identity documents and selfies for verification."
       }
     },
     "android": {
-      "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_EXTERNAL_STORAGE"
-      ]
+      "permissions": ["android.permission.CAMERA"]
     }
   }
 }
@@ -151,6 +169,55 @@ cd ios && pod install && cd ..
 No additional setup required. Permissions are handled automatically.
 
 ---
+
+## 📷 Embeddable Live Cameras (2.2+)
+
+Two views draw **only the camera and its overlay**; your app lays out the screen around them (header, titles,
+status text, buttons) and follows their state.
+
+### `DocumentScanView`
+
+The back camera in a rounded viewport, a frame guide for an ID-1 card or an upright passport page with the outside
+dimmed, OpenCV edge detection, and a photo taken on its own once the document holds still, cropped to the guide.
+
+```tsx
+const scanRef = useRef<DocumentScanViewRef>(null);
+
+<DocumentScanView
+  ref={scanRef}
+  docType="civil_id"                // 'passport' frames an upright page
+  style={{ width: 362, height: 400 }}
+  accentColor="#55D4C9"             // the guide once found
+  onStatusChange={setStatus}        // 'starting' | 'searching' | 'found' | 'capturing'
+  onCapture={({ uri, originalUri }) => upload(uri)}
+  onError={({ code }) => {}}        // 'PERMISSION_DENIED' | 'NO_CAMERA' | 'CAPTURE_FAILED'
+/>
+<Button title="Take photo" onPress={() => scanRef.current?.capture()} />
+```
+
+### `SelfieLivenessView`
+
+The front camera in a circle ringed by bars, a head-turn challenge (left, right, up in a shuffled order; ML Kit face
+angles via `react-native-vision-camera-face-detector`), then a photo taken on its own once the face is back in front
+of the camera. The photo goes through the passive check (`scoreLiveness`: a printed photo or a screen) before it is
+handed back; under `livenessThreshold` the state becomes `notLive` and `restart()` starts over.
+
+```tsx
+<SelfieLivenessView
+  ref={livenessRef}
+  style={{ width: 362 }}
+  colors={{ idle: '#D4D9E6', active: '#55D4C9', done: '#3DB8AF', error: '#E65359', warning: '#F3B44A' }}
+  onStateChange={setState}          // { phase, direction, steps, completed, progress }
+  onCapture={({ uri, livenessScore }) => upload(uri)}
+/>
+```
+
+The challenge itself (`advanceChallenge`, `startChallenge`) is a pure state machine you can test and tune
+(`challenge={{ yawThreshold: 25, pitchThreshold: 15, yawSign: 1 }}`). **Check `yawSign` on a device**: it decides
+which way ML Kit's yaw counts as the customer's left on the mirrored preview.
+
+Both need the camera permission granted before they mount. The passive check is a heuristic, not certified
+presentation-attack detection.
 
 ## 🛠️ Configuration System
 

@@ -6,9 +6,23 @@ import { ImageProcessor } from '../utils/imageProcessor';
 import { DEFAULT_CONFIG } from '../types/config';
 import { TemplateLoader } from '../utils/templateLoader';
 
+export interface LivenessResult {
+  isLive: boolean;
+  score: number;
+  confidence: number;
+  summary: string;
+}
+
 export interface CaptureResult {
   originalImageUri: string;
   croppedImageUri: string;
+  liveness?: LivenessResult;
+}
+
+export interface CaptureError {
+  code: 'TEMPLATE_INVALID' | 'CROP_FAILED' | 'CAPTURE_FAILED' | 'UNKNOWN';
+  message: string;
+  details?: string;
 }
 
 interface CameraManagerProps {
@@ -16,9 +30,14 @@ interface CameraManagerProps {
   docType: VerifiedDocType;
   onCapture: (result: CaptureResult) => void;
   onCancel: () => void;
+  onError?: (error: CaptureError) => void;
   disableDetection?: boolean;
   enableFlash?: boolean;
   enableOCRValidation?: boolean;
+  /** Enable liveness detection to detect screen captures */
+  enableLivenessDetection?: boolean;
+  /** Block capture if liveness check fails */
+  blockOnLivenessFail?: boolean;
 }
 
 /**
@@ -30,9 +49,12 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
   docType,
   onCapture,
   onCancel,
+  onError,
   disableDetection = false,
   enableFlash = true,
   enableOCRValidation = false,
+  enableLivenessDetection = false,
+  blockOnLivenessFail = false,
 }) => {
   const [isModalVisible, setIsModalVisible] = useState(visible);
 
@@ -44,22 +66,56 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
   const handleCapture = async (imageUri: string) => {
     console.log(`📸 Image captured: ${imageUri}`);
     setIsModalVisible(false);
-    
+
     try {
       // Try to use template-based cropping first
       let croppedImageUri: string;
-      
+
       console.log(`🔍 Looking for template for ${docType}...`);
       const template = await TemplateLoader.loadTemplate(docType);
-      
+
       if (template) {
         console.log(`📋 Using template-based cropping for ${docType}`);
-        croppedImageUri = await ImageProcessor.cropDocumentFromTemplate(imageUri, template);
+        try {
+          croppedImageUri = await ImageProcessor.cropDocumentFromTemplate(imageUri, template);
+        } catch (cropError) {
+          const errorMessage = cropError instanceof Error ? cropError.message : 'Unknown error';
+          console.error(`❌ Template cropping failed: ${errorMessage}`);
+
+          // Check if it's a template-related error
+          if (errorMessage.includes('template') || errorMessage.includes('Invalid')) {
+            const captureError: CaptureError = {
+              code: 'TEMPLATE_INVALID',
+              message: 'The document template configuration is invalid.',
+              details: errorMessage
+            };
+
+            if (onError) {
+              onError(captureError);
+            } else {
+              // Show default alert if no error handler provided
+              Alert.alert(
+                'Template Error',
+                `Unable to process the document with the current template. The image was captured but cropping failed.\n\nDetails: ${errorMessage}`,
+                [{ text: 'OK' }]
+              );
+            }
+
+            // Still return the original image
+            onCapture({
+              originalImageUri: imageUri,
+              croppedImageUri: imageUri
+            });
+            return;
+          }
+
+          throw cropError; // Re-throw for general handling below
+        }
       } else {
         // Fallback to frame config from DEFAULT_CONFIG
         console.log(`⚠️ No template found for ${docType}, using frame config`);
         const frameConfig = DEFAULT_CONFIG.theme.layout.frame[docType];
-        
+
         if (!frameConfig) {
           console.warn(`⚠️ No frame config found for ${docType}, using default crop`);
           croppedImageUri = await ImageProcessor.cropDocumentFromFrame(imageUri, {
@@ -78,15 +134,27 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
           croppedImageUri = await ImageProcessor.cropDocumentFromFrame(imageUri, cropConfig);
         }
       }
-      
+
       console.log(`✅ Generated cropped image: ${croppedImageUri}`);
-      
+
       onCapture({
         originalImageUri: imageUri,
         croppedImageUri: croppedImageUri
       });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('❌ Failed to generate cropped image:', error);
+
+      const captureError: CaptureError = {
+        code: 'CROP_FAILED',
+        message: 'Failed to crop the captured image.',
+        details: errorMessage
+      };
+
+      if (onError) {
+        onError(captureError);
+      }
+
       // Fallback: use original image as both original and cropped
       onCapture({
         originalImageUri: imageUri,
@@ -117,6 +185,8 @@ export const CameraManager: React.FC<CameraManagerProps> = ({
         disableDetection={disableDetection}
         enableFlash={enableFlash}
         enableOCRValidation={enableOCRValidation}
+        enableLivenessDetection={enableLivenessDetection}
+        blockOnLivenessFail={blockOnLivenessFail}
       />
     </Modal>
   );

@@ -1,6 +1,6 @@
 import { DocumentExtractor } from "../core/DocumentExtractor";
 import { ExtractedIdResult, CaptureOptions, VerifiedDocType } from "../types/extraction";
-import MLKit from "@react-native-ml-kit/text-recognition";
+import { recognizeTextSimple, getCloudVisionConfig } from "../services/CloudVisionOCR";
 
 /**
  * Main API function: Capture and extract document data
@@ -114,15 +114,20 @@ function getRequiredSides(docType: VerifiedDocType): string[] {
  */
 export async function detectDocumentType(imageUri: string): Promise<VerifiedDocType> {
   try {
-    const result = await MLKit.recognize(imageUri);
-    const text = result.text || "";
+    // Check if Cloud Vision is configured
+    if (!getCloudVisionConfig()) {
+      console.warn("Cloud Vision not configured, defaulting to civil_id");
+      return "civil_id";
+    }
+
+    const text = await recognizeTextSimple(imageUri, ['ar', 'en', 'fr']);
 
     // Simple heuristics for document type detection
     if (text.includes("P<") || /^[A-Z]{2}\d{7}/.test(text)) {
       return "passport";
-    } else if (text.includes("الجيش") || text.includes("Army")) {
+    } else if (text.includes("الجيش") || text.includes("Army") || text.includes("military")) {
       return "army_card";
-    } else if (text.includes("إقامة") || text.includes("Residence")) {
+    } else if (text.includes("إقامة") || text.includes("Residence") || text.includes("Residency") || text.includes("Permit")) {
       return "residence_permit";
     } else {
       return "civil_id"; // Default

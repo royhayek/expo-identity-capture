@@ -3,6 +3,9 @@
     "name": "indenty-verification-example",
     "slug": "indenty-verification-example",
     "version": "1.0.0",
+    "extra": {
+      "googleCloudVisionApiKey": "***REMOVED***"
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

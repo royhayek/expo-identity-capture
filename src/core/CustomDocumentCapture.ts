@@ -1,5 +1,5 @@
 import { VerifiedDocType } from "../types/extraction";
-import { Camera } from 'react-native-vision-camera';
+import { VisionCamera } from 'react-native-vision-camera';
 import OpenCVDocumentDetection from './OpenCVDocumentDetection';
 import GlobalCameraManager from './CameraManager';
 import { ImageProcessor } from '../utils/imageProcessor';
@@ -78,13 +78,13 @@ export class CustomDocumentCapture {
     
     try {
       // Check camera permissions
-      const cameraPermission = await Camera.getCameraPermissionStatus();
+      const cameraPermission = VisionCamera.cameraPermissionStatus;
       
-      if (cameraPermission !== 'granted') {
+      if (cameraPermission !== 'authorized') {
         console.log('📋 Requesting camera permission...');
-        const newCameraPermission = await Camera.requestCameraPermission();
+        const granted = await VisionCamera.requestCameraPermission();
         
-        if (newCameraPermission !== 'granted') {
+        if (!granted) {
           throw new Error('Camera permission denied');
         }
       }

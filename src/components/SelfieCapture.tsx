@@ -23,7 +23,9 @@ import {
   Camera,
   useCameraDevice,
   useCameraPermission,
+  usePhotoOutput,
 } from "react-native-vision-camera";
+import { toFileUri } from "../utils/fileUri";
 import {
   useThemedStyles,
   useProgressColors,
@@ -78,7 +80,8 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
   // Camera setup - use front camera for selfie
   const device = useCameraDevice("front");
   const { hasPermission, requestPermission } = useCameraPermission();
-  const cameraRef = useRef<Camera>(null);
+  const photoOutput = usePhotoOutput({ qualityPrioritization: "quality" });
+  const outputs = React.useMemo(() => [photoOutput], [photoOutput]);
 
   useEffect(() => {
     if (!hasPermission) {
@@ -91,7 +94,7 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
   }, [isFlashEnabled]);
 
   const handleCapture = useCallback(async () => {
-    if (captureInProgress || !cameraRef.current || !isCameraReady) return;
+    if (captureInProgress || !isCameraReady) return;
 
     setCaptureInProgress(true);
 
@@ -107,13 +110,12 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
     try {
       console.log("📷 Taking selfie photo...");
 
-      const photo = await cameraRef.current.takePhoto({
-        flash: isFlashEnabled ? "on" : "off",
-      });
+      const photo = await photoOutput.capturePhotoToFile(
+        { flashMode: isFlashEnabled ? "on" : "off" },
+        {}
+      );
 
-      const imagePath = photo.path.startsWith("file://")
-        ? photo.path
-        : `file://${photo.path}`;
+      const imagePath = toFileUri(photo.filePath);
       console.log("📸 Selfie captured successfully:", imagePath);
 
       onCapture(imagePath);
@@ -130,6 +132,7 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
     onCapture,
     isCameraReady,
     isFlashEnabled,
+    photoOutput,
     theme.animation.progress?.duration,
     progressAnimation,
   ]);
@@ -151,12 +154,12 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
   if (!hasPermission) {
     return (
       <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>Camera permission required</Text>
+        <Text style={styles.permissionText}>{getUIText("cameraPermissionRequired")}</Text>
         <TouchableOpacity
           style={styles.permissionButton}
           onPress={requestPermission}
         >
-          <Text style={styles.permissionButtonText}>Grant Permission</Text>
+          <Text style={styles.permissionButtonText}>{getUIText("grantPermission")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -165,9 +168,9 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
   if (!device) {
     return (
       <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>No front camera available</Text>
+        <Text style={styles.permissionText}>{getUIText("noFrontCamera")}</Text>
         <TouchableOpacity style={styles.permissionButton} onPress={onCancel}>
-          <Text style={styles.permissionButtonText}>Cancel</Text>
+          <Text style={styles.permissionButtonText}>{getUIText("cancel")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -179,14 +182,13 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
 
       <View style={styles.cameraContainer}>
         <Camera
-          ref={cameraRef}
           style={StyleSheet.absoluteFill}
           device={device}
           isActive={true}
-          photo={true}
-          torch={isFlashEnabled ? "on" : "off"}
-          onInitialized={() => {
-            console.log("✅ Front camera initialized");
+          outputs={outputs}
+          torchMode={isFlashEnabled ? "on" : "off"}
+          onStarted={() => {
+            console.log("✅ Front camera started");
             setIsCameraReady(true);
           }}
           onError={(error) => {
@@ -283,7 +285,7 @@ export const ModernSelfieCapture: React.FC<SelfieCaptureProps> = ({
             />
           </TouchableOpacity>
           <View style={styles.headerTitleContainer}>
-            <Text style={styles.headerTitle}>Live Selfie</Text>
+            <Text style={styles.headerTitle}>{getUIText("selfieTitle")}</Text>
           </View>
           <View style={styles.rightButtonContainer}>
             {enableFlash && (

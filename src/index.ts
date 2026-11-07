@@ -8,6 +8,64 @@ export {
 
 export { SelfieCaptureAPI } from "./api/selfieCapture";
 
+// Cloud Vision OCR (Arabic + multi-language support)
+export {
+  initCloudVision,
+  recognizeText,
+  recognizeTextSimple,
+  getCloudVisionConfig,
+} from "./services/CloudVisionOCR";
+export type {
+  CloudVisionConfig,
+  CloudVisionResponse,
+  CloudVisionError,
+  TextAnnotation,
+} from "./services/CloudVisionOCR";
+
+// MRZ Parser (Machine Readable Zone for passports/IDs)
+export {
+  detectAndParseMRZ,
+  calculateCheckDigit,
+  validateCheckDigit,
+  getCountryName,
+  formatSex,
+} from "./services/MRZParser";
+export type {
+  MRZType,
+  MRZSex,
+  MRZCheckDigits,
+  ParsedMRZ,
+  MRZDetectionResult,
+} from "./services/MRZParser";
+
+// Data Normalization (nationality, gender, dates, places)
+export {
+  normalizeNationality,
+  normalizeGender,
+  normalizePlaceName,
+  normalizeDate,
+  normalizeName,
+  normalizeDocumentNumber,
+  normalizeExtractedData,
+  getCountryCode,
+} from "./services/DataNormalizer";
+export type {
+  NormalizedGender,
+  NormalizedField,
+  NormalizedExtractedData,
+} from "./services/DataNormalizer";
+
+// On-device document reading (ML Kit OCR + MRZ); needs react-native-vision-camera-mlkit
+export { readIdentityDocument, readingFromText, normalizeMrzCountry } from "./services/DocumentReader";
+export type { IdentityDocumentReading, DocumentReaderError } from "./services/DocumentReader";
+
+// OCR Field Extraction
+export { extractFieldsFromOCR } from "./services/OCRFieldExtractor";
+export type {
+  RawExtractedFields,
+  ExtractedFieldsWithNormalization,
+} from "./services/OCRFieldExtractor";
+
 // Import for the unified API object
 import { 
   captureAndExtract,
@@ -28,15 +86,66 @@ export { ImageProcessor } from "./utils/imageProcessor";
 export { TemplateLoader } from "./utils/templateLoader";
 export { DocumentValidation } from "./utils/documentValidation";
 
+// OpenCV-based document detection
+export { detectDocumentWithOpenCV, frameToProcessingBuffer } from "./core/OpenCVFrameProcessor";
+export type { DetectedDocumentCorners, DocumentDetectionResult, ProcessingBuffer } from "./core/OpenCVFrameProcessor";
+
+// Document detection hooks
+export { useDocumentDetection } from "./hooks/useDocumentDetection";
+export type { DetectionUpdate, DocumentDetectionConfig, UseDocumentDetectionReturn } from "./hooks/useDocumentDetection";
+
 // Custom capture exports for host app integration
 export { CameraManager, default as GlobalCameraManager } from "./core/CameraManager";
 export { SelfieManager, default as GlobalSelfieManager } from "./core/SelfieManager";
 export { default as CustomCameraView } from "./components/CustomCameraView";
+
+// Embeddable live cameras: the preview and its overlay only; the host app draws the screen around them
+export { DocumentScanView, guideBox, cropForGuide } from "./components/DocumentScanView";
+export type {
+  DocumentScanViewProps,
+  DocumentScanViewRef,
+  DocumentScanStatus,
+  DocumentScanResult,
+  DocumentScanError,
+} from "./components/DocumentScanView";
+export { SelfieLivenessView, toFaceSample } from "./components/SelfieLivenessView";
+export type {
+  SelfieLivenessViewProps,
+  SelfieLivenessViewRef,
+  SelfieLivenessState,
+  SelfieLivenessResult,
+  SelfieLivenessError,
+  SelfieLivenessColors,
+} from "./components/SelfieLivenessView";
+export {
+  advanceChallenge,
+  startChallenge,
+  shuffledDirections,
+  directionProgress,
+  isFaceInCircle,
+  currentDirection,
+  DEFAULT_CHALLENGE_CONFIG,
+} from "./services/LivenessChallenge";
+export type {
+  LivenessDirection,
+  LivenessPhase,
+  FaceSample,
+  LivenessChallengeConfig,
+  LivenessChallengeState,
+} from "./services/LivenessChallenge";
 export { ModernSelfieCapture } from "./components/SelfieCapture";
 export { CustomDocumentCapture } from "./core/CustomDocumentCapture";
 export type { CustomCaptureOptions, CustomCaptureResult } from "./core/CustomDocumentCapture";
-export type { CaptureResult } from "./core/CameraManager";
+export type { CaptureResult, CaptureError, LivenessResult } from "./core/CameraManager";
 export type { SelfieCaptureResult as CustomSelfieCaptureResult } from "./core/SelfieManager";
+
+// Liveness Detection for screen capture/digital copy detection
+export { LivenessDetection, scoreLiveness } from "./services/LivenessDetection";
+export type {
+  LivenessDetectionResult,
+  LivenessDetectionConfig,
+  DetectionMethodResult
+} from "./services/LivenessDetection";
 
 export type {
   DocumentType,
@@ -77,7 +186,8 @@ export type {
   ImageProcessingConfig,
   ValidationConfig,
   FrameDimensions,
-  FieldPosition
+  FieldPosition,
+  LivenessConfig
 } from "./types/config";
 
 // Configuration hooks and providers
@@ -91,15 +201,7 @@ export { responsiveScale, useResponsiveTheme, getResponsiveFontSize, getResponsi
 export { ConfigurableLocalizationManager, DEFAULT_STRINGS } from "./localization/ConfigurableLocalization";
 
 // Direct DocumentScanner access for backwards compatibility
-let DocumentScanner: any = null;
-try {
-  DocumentScanner = require("react-native-document-scanner-plugin");
-} catch (error) {
-  console.warn("react-native-document-scanner-plugin not available");
-}
-
-// Export DocumentScanner for direct access
-export { DocumentScanner };
+export { default as DocumentScanner } from "react-native-document-scanner-plugin";
 
 // Main unified API object
 export const IdentityCapture = {

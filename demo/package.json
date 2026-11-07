@@ -10,7 +10,7 @@
     "clean:install": "rm -rf node_modules && rm -rf package-lock.json && npm install && cd ios && rm -rf Pods && rm -rf Podfile.lock && pod install && cd .. && npx expo prebuild && npx expo run:ios --device=00008140-0009303E1184801C"
   },
   "dependencies": {
-    "@react-native-ml-kit/text-recognition": "^1.0.0",
+    "expo-file-system": "~18.1.11",
     "expo": "~53.0.22",
     "expo-camera": "~16.1.11",
     "expo-constants": "~17.1.7",
@@ -23,7 +23,8 @@
     "react-native-document-scanner-plugin": "^1.0.0",
     "react-native-fast-opencv": "^0.4.6",
     "react-native-reanimated": "^4.0.2",
-    "react-native-vision-camera": "^4.7.1",
+    "react-native-vision-camera": "^4.7.3",
+    "vision-camera-resize-plugin": "^3.2.0",
     "react-native-worklets": "^0.4.1",
     "react-native-worklets-core": "^1.6.2",
     "react-native-svg": "^15.12.1",

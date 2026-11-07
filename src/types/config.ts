@@ -147,6 +147,15 @@ export interface LocalizationConfig {
         flashOff?: string;
         back?: string;
         front?: string;
+        selfie_instruction?: string;
+        selfieTitle?: string;
+        capturing?: string;
+        holdSteadyCapturing?: string;
+        documentDetected?: string;
+        cameraPermissionRequired?: string;
+        grantPermission?: string;
+        noCamera?: string;
+        noFrontCamera?: string;
       };
     };
   };
@@ -268,6 +277,44 @@ export interface ValidationConfig {
 }
 
 // ============================================================================
+// LIVENESS DETECTION CONFIGURATION
+// ============================================================================
+
+export interface LivenessConfig {
+  /** Enable liveness detection for documents */
+  enableForDocuments?: boolean;        // Default: false
+  /** Enable liveness detection for selfies */
+  enableForSelfies?: boolean;          // Default: false
+  /** Minimum score to pass liveness check (0-1) */
+  threshold?: number;                   // Default: 0.55
+  /** Detection methods to enable */
+  methods?: {
+    /** Detect moire patterns from screen pixel grids */
+    moire?: boolean;                    // Default: true
+    /** Detect color banding from limited screen color depth */
+    colorBanding?: boolean;             // Default: true
+    /** Analyze edge sharpness uniformity */
+    edgeSharpness?: boolean;            // Default: true
+    /** Detect screen reflections and backlight */
+    reflection?: boolean;               // Default: true
+    /** Analyze texture (paper/skin vs flat screen) */
+    texture?: boolean;                  // Default: true
+  };
+  /** Weights for each detection method (must sum to ~1) */
+  weights?: {
+    moire?: number;                     // Default: 0.25
+    colorBanding?: number;              // Default: 0.20
+    edgeSharpness?: number;             // Default: 0.20
+    reflection?: number;                // Default: 0.15
+    texture?: number;                   // Default: 0.20
+  };
+  /** Block capture if liveness check fails */
+  blockOnFailure?: boolean;             // Default: false (just warn)
+  /** Show liveness score in UI */
+  showScoreInUI?: boolean;              // Default: true when enabled
+}
+
+// ============================================================================
 // MAIN CONFIGURATION INTERFACE
 // ============================================================================
 
@@ -278,15 +325,16 @@ export interface IdentityCaptureConfig {
     layout?: LayoutConfig;
     animation?: AnimationConfig;
   };
-  
+
   localization?: LocalizationConfig;
-  
+
   behavior?: {
     detection?: DetectionConfig;
     camera?: CameraConfig;
     imageProcessing?: ImageProcessingConfig;
+    liveness?: LivenessConfig;
   };
-  
+
   documents?: {
     templates?: Record<VerifiedDocType, DocumentTemplate>;
     validation?: ValidationConfig;
@@ -450,8 +498,29 @@ export const DEFAULT_CONFIG: Required<IdentityCaptureConfig> = {
       },
       output: 'uri',
     },
+    liveness: {
+      enableForDocuments: false,
+      enableForSelfies: false,
+      threshold: 0.55,
+      methods: {
+        moire: true,
+        colorBanding: true,
+        edgeSharpness: true,
+        reflection: true,
+        texture: true,
+      },
+      weights: {
+        moire: 0.25,
+        colorBanding: 0.20,
+        edgeSharpness: 0.20,
+        reflection: 0.15,
+        texture: 0.20,
+      },
+      blockOnFailure: false,
+      showScoreInUI: true,
+    },
   },
-  
+
   documents: {
     templates: {} as Record<VerifiedDocType, DocumentTemplate>,
     validation: {
