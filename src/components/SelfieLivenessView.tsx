@@ -2,7 +2,8 @@
  * SelfieLivenessView Component
  *
  * An embeddable selfie camera with a head-turn liveness challenge: the front camera in a circle, ringed by
- * bars that light up and grow in the direction asked as the head turns (ML Kit face angles), then a photo
+ * bars that light up and grow in the direction asked as the head turns (face angles from Apple Vision on
+ * iOS, ML Kit on Android, read in a frame processor), then a photo
  * taken on its own once the customer faces the camera again. The photo is checked for a printed photo or a
  * screen (moiré, colour, high-frequency and brightness analysis) before it is handed back.
  *
@@ -13,13 +14,12 @@
  */
 
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Line } from 'react-native-svg';
-import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
-import { createFaceDetectorOutput, type Face } from 'react-native-vision-camera-face-detector';
-import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { Camera, CommonResolutions, useFrameOutput, usePhotoOutput, type Frame } from 'react-native-vision-camera';
+import { scheduleOnRN } from 'react-native-worklets';
 import { File } from 'expo-file-system';
-import { ColorConversionCodes, DataTypes, InterpolationFlags, OpenCV } from 'react-native-fast-opencv';
+import { ColorConversionCodes, DataTypes, OpenCV } from 'react-native-fast-opencv';
 
 import {
   DEFAULT_CHALLENGE_CONFIG,
@@ -33,7 +33,10 @@ import {
   type LivenessDirection,
   type LivenessPhase,
 } from '../services/LivenessChallenge';
+import { useCameraAccess } from '../hooks/useCameraAccess';
 import { scoreLiveness } from '../services/LivenessDetection';
+import { createFacePoseDetector, type FacePose, type FacePoseDetector } from '../core/FacePoseDetector';
+import { cropToFile } from '../utils/cropToFile';
 import { cropForGuide } from './DocumentScanView';
 import { toFileUri } from '../utils/fileUri';
 
@@ -63,7 +66,8 @@ export interface SelfieLivenessResult {
 }
 
 export interface SelfieLivenessError {
-  code: 'PERMISSION_DENIED' | 'NO_CAMERA' | 'FACE_DETECTION_FAILED' | 'CAPTURE_FAILED';
+  /** `CAMERA_FAILED`: the camera stopped on its own (in use by another app, a call, the system) */
+  code: 'PERMISSION_DENIED' | 'NO_CAMERA' | 'CAMERA_FAILED' | 'FACE_DETECTION_FAILED' | 'CAPTURE_FAILED';
   message: string;
 }
 
@@ -124,28 +128,52 @@ const RING = {
 };
 /** Each direction's place on the ring (degrees, 0 = right, clockwise) */
 const ARC_CENTRES: Record<LivenessDirection, number> = { right: 0, up: 270, left: 180 };
-/** Longer side of the image the passive check runs on */
-const CHECK_LONG_SIDE = 480;
+/**
+ * Side of the square the passive check runs on, taken from the photo's centre at its own resolution: scaling the photo
+ * down would average away the screen's pixel grid and moiré the check looks for
+ */
+const CHECK_SIDE = 480;
 /** Progress changes smaller than this don't re-render */
 const PROGRESS_STEP = 0.05;
+const FRAME_PROCESSING = {
+  /** Look for the face about 10 times a second, whatever the camera's frame rate (30 or 60 fps) */
+  INTERVAL_MS: 100,
+  /** Faces are small enough at preview size; the detectors scale down further themselves */
+  TARGET_RESOLUTION: { width: 1280, height: 720 },
+};
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-/** A detected face as the challenge reads it */
-export function toFaceSample(face: Face): FaceSample {
-  const { bounds, frameWidth, frameHeight } = face;
-  const shorter = Math.min(frameWidth, frameHeight) || 1;
-  const left = face.leftEyeOpenProbability;
-  const right = face.rightEyeOpenProbability;
+/**
+ * The sign that makes the platform detector's pitch "positive = head up", the challenge's convention.
+ * Apple Vision counts a head tilted down as positive (measured on an iPhone 16 Pro Max: head bowed to the
+ * phone +20°, tilted back -37°); ML Kit counts a head tilted up as positive. Applied here, in JS, so it holds
+ * whichever native build a phone runs.
+ */
+export const PITCH_UP_SIGN: 1 | -1 = Platform.OS === 'ios' ? -1 : 1;
+
+/**
+ * A detected face as the challenge reads it. The pose's box is relative to the upright frame, whose sides
+ * are the buffer's swapped when the buffer is rotated a quarter turn.
+ */
+export function toFaceSample(
+  pose: FacePose,
+  uprightWidth: number,
+  uprightHeight: number,
+  pitchUpSign: 1 | -1 = PITCH_UP_SIGN
+): FaceSample {
+  'worklet';
+  const shorter = Math.min(uprightWidth, uprightHeight) || 1;
   return {
-    yaw: face.yawAngle,
-    pitch: face.pitchAngle,
-    centerX: frameWidth ? (bounds.x + bounds.width / 2) / frameWidth : 0.5,
-    centerY: frameHeight ? (bounds.y + bounds.height / 2) / frameHeight : 0.5,
-    size: bounds.width / shorter,
-    eyesOpen: left === undefined || right === undefined ? null : left > 0.6 && right > 0.6,
+    yaw: pose.yaw,
+    pitch: pitchUpSign * pose.pitch,
+    centerX: pose.x + pose.width / 2,
+    centerY: pose.y + pose.height / 2,
+    size: (pose.width * uprightWidth) / shorter,
+    // Neither detector is asked for eye state
+    eyesOpen: null,
   };
 }
 
@@ -189,26 +217,24 @@ function barsFor(state: SelfieLivenessState, colors: SelfieLivenessColors): Bar[
   return bars;
 }
 
-/** The passive check on a photo: decoded and scaled down with OpenCV, scored as BGR */
+/** The passive check on a photo: its centre square decoded with OpenCV at the photo's resolution, scored as BGR */
 async function scorePhoto(uri: string): Promise<number> {
-  const base64 = await new File(uri).base64();
-  const decoded = OpenCV.Mat.createFromBase64(base64);
-  const { cols, rows, channels } = decoded.toBuffer('uint8');
-  const scale = Math.min(1, CHECK_LONG_SIDE / Math.max(cols, rows));
-  const width = Math.floor(cols * scale);
-  const height = Math.floor(rows * scale);
-  const resized = OpenCV.Mat.create(0, 0, channels === 4 ? DataTypes.CV_8UC4 : DataTypes.CV_8UC3);
-  OpenCV.resize(decoded, resized, OpenCV.Size.create(width, height), 0, 0, InterpolationFlags.INTER_AREA);
-  let bgr = resized;
+  const decoded = OpenCV.Mat.createFromBase64(await new File(uri).base64());
+  const { cols, rows } = decoded;
+  const side = Math.min(CHECK_SIDE, cols, rows);
+  const centre = OpenCV.Mat.create(0, 0, DataTypes.CV_8UC3);
+  OpenCV.crop(decoded, centre, OpenCV.Rect.create(Math.floor((cols - side) / 2), Math.floor((rows - side) / 2), side, side));
+  decoded.release();
+  let bgr = centre;
+  const channels = centre.toBuffer('uint8').channels;
   if (channels === 4) {
     bgr = OpenCV.Mat.create(0, 0, DataTypes.CV_8UC3);
-    OpenCV.cvtColor(resized, bgr, ColorConversionCodes.COLOR_BGRA2BGR);
+    OpenCV.cvtColor(centre, bgr, ColorConversionCodes.COLOR_BGRA2BGR);
+    centre.release();
   }
   const { buffer } = bgr.toBuffer('uint8');
-  decoded.release();
-  resized.release();
-  if (bgr !== resized) bgr.release();
-  return scoreLiveness(buffer, width, height).overallScore;
+  bgr.release();
+  return scoreLiveness(buffer, side, side).overallScore;
 }
 
 const viewStateOf = (challenge: LivenessChallengeState): SelfieLivenessState => ({
@@ -250,9 +276,10 @@ export const SelfieLivenessView = forwardRef<SelfieLivenessViewRef, SelfieLivene
   const [size, setSize] = useState(0);
   const [isCameraReady, setIsCameraReady] = useState(false);
 
-  const device = useCameraDevice('front');
-  const { hasPermission } = useCameraPermission();
-  const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality' });
+  const camera = useCameraAccess('front', isActive);
+  const { device, hasPermission } = camera;
+  // A selfie needs no more than 1440 × 1920: a phone's full sensor would only make the photo slower to take, crop and send
+  const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality', targetResolution: CommonResolutions.FHD_4_3 });
 
   const pickSteps = useCallback(() => steps ?? shuffledDirections(), [steps]);
   const challengeRef = useRef<LivenessChallengeState>(startChallenge(pickSteps()));
@@ -264,36 +291,118 @@ export const SelfieLivenessView = forwardRef<SelfieLivenessViewRef, SelfieLivene
     setViewState((current) => (sameViewState(current, shown) ? current : shown));
   }, []);
 
-  // ML Kit faces, delivered on the JS thread by a native camera output
+  // Faces from the native detector, on the frame output's thread; each sample is handed to the challenge here
   const configRef = useRef(config);
   configRef.current = config;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
-  const onFacesDetected = useCallback(
-    (faces: Face[]) => {
-      if (!isCameraReady) return;
-      const face = faces.length === 1 ? toFaceSample(faces[0]) : null;
-      const next = advanceChallenge(challengeRef.current, face, Date.now(), configRef.current);
+  // Read through a ref: a new callback each render must not restart (and so cancel) a photo being taken
+  const onCaptureRef = useRef(onCapture);
+  onCaptureRef.current = onCapture;
+  const isCameraReadyRef = useRef(isCameraReady);
+  isCameraReadyRef.current = isCameraReady;
+  const lastLogRef = useRef(0);
+  const handleSample = useCallback(
+    (face: FaceSample | null) => {
+      if (!isCameraReadyRef.current) return;
+      detectionFailedRef.current = false;
+      const now = Date.now();
+      const next = advanceChallenge(challengeRef.current, face, now, configRef.current);
+      // Development builds only: the angles the challenge reads, twice a second, to tune thresholds and signs
+      if (__DEV__ && now - lastLogRef.current > 500) {
+        lastLogRef.current = now;
+        const neutral = next.neutral ?? { yaw: 0, pitch: 0 };
+        console.log(
+          face
+            ? `[Liveness] ${next.phase} ${currentDirection(next) ?? ''} yaw ${(face.yaw - neutral.yaw).toFixed(1)}° ` +
+                `pitch ${(face.pitch - neutral.pitch).toFixed(1)}° centre ${face.centerX.toFixed(2)},${face.centerY.toFixed(2)} ` +
+                `size ${face.size.toFixed(2)} progress ${next.progress.toFixed(2)}`
+            : `[Liveness] ${next.phase} no face`
+        );
+      }
       if (next !== challengeRef.current) publish(next);
     },
-    [isCameraReady, publish]
+    [publish]
   );
-  const onFacesRef = useRef(onFacesDetected);
-  onFacesRef.current = onFacesDetected;
-  // Created once: the output is a native object, rebuilding it would reconfigure the camera
-  const faceOutput = useMemo(
-    () =>
-      createFaceDetectorOutput({
-        performanceMode: 'fast',
-        runClassifications: true,
-        cameraFacing: 'front',
-        outputResolution: 'preview',
-        onFacesDetected: (faces) => onFacesRef.current(faces),
-        onError: (error) => onErrorRef.current?.({ code: 'FACE_DETECTION_FAILED', message: error.message }),
-      }),
-    []
+  // Once per failure, not on every frame: an unavailable detector (Android, Play services still downloading the model,
+  // or missing) fails each frame until it recovers
+  const detectionFailedRef = useRef(false);
+  const handleDetectionError = useCallback((message: string) => {
+    if (detectionFailedRef.current) return;
+    detectionFailedRef.current = true;
+    onErrorRef.current?.({ code: 'FACE_DETECTION_FAILED', message });
+  }, []);
+  // Development builds only: the detector's raw reading and how the frame is turned, to check orientation and signs
+  const logRawPose = useCallback((line: string) => {
+    console.log(`[Liveness raw] ${line}`);
+  }, []);
+
+  // Made and disposed by the same effect: a detector made in a memo would stay disposed after React's development
+  // double-run of effects (StrictMode), and fail on every frame
+  const [detector, setDetector] = useState<FacePoseDetector | null>(null);
+  useEffect(() => {
+    const made = createFacePoseDetector();
+    setDetector(made);
+    return () => {
+      setDetector(null);
+      made.dispose();
+    };
+  }, []);
+
+  // Captured by the frame worklet as a plain number
+  const pitchUpSign = PITCH_UP_SIGN;
+  const onFrame = useCallback(
+    (frame: Frame) => {
+      'worklet';
+
+      try {
+        const runtime = globalThis as unknown as { __selfieLivenessLastAt?: number };
+        const now = Date.now();
+        if (now - (runtime.__selfieLivenessLastAt ?? 0) < FRAME_PROCESSING.INTERVAL_MS) {
+          return;
+        }
+        runtime.__selfieLivenessLastAt = now;
+        if (detector === null) return;
+        const sideways = frame.orientation === 'left' || frame.orientation === 'right';
+        const uprightWidth = sideways ? frame.height : frame.width;
+        const uprightHeight = sideways ? frame.width : frame.height;
+        const faces = detector.detect(frame);
+        if (__DEV__) {
+          const debug = globalThis as unknown as { __selfieLivenessLogCount?: number };
+          debug.__selfieLivenessLogCount = ((debug.__selfieLivenessLogCount ?? 0) + 1) % 5;
+          if (debug.__selfieLivenessLogCount === 0) {
+            const pose = faces[0];
+            scheduleOnRN(
+              logRawPose,
+              `frame ${frame.width}x${frame.height} orientation=${frame.orientation} mirrored=${frame.isMirrored} faces=${faces.length}` +
+                (pose
+                  ? ` yaw=${pose.yaw.toFixed(1)} pitch=${pose.pitch.toFixed(1)} roll=${pose.roll.toFixed(1)} box=${pose.x.toFixed(2)},${pose.y.toFixed(2)} ${pose.width.toFixed(2)}x${pose.height.toFixed(2)}`
+                  : '')
+            );
+          }
+        }
+        // One face only: none, or more than one, is no face for the challenge
+        scheduleOnRN(
+          handleSample,
+          faces.length === 1 ? toFaceSample(faces[0], uprightWidth, uprightHeight, pitchUpSign) : null
+        );
+      } catch (error) {
+        scheduleOnRN(handleDetectionError, error instanceof Error ? error.message : String(error));
+      } finally {
+        frame.dispose();
+      }
+    },
+    [detector, handleDetectionError, handleSample, logRawPose, pitchUpSign]
   );
-  const outputs = useMemo(() => [photoOutput, faceOutput], [photoOutput, faceOutput]);
+
+  // YUV: what both detectors read natively, without a conversion in the camera pipeline
+  const frameOutput = useFrameOutput({
+    pixelFormat: 'yuv',
+    targetResolution: FRAME_PROCESSING.TARGET_RESOLUTION,
+    onFrame,
+    onFrameDropped: () => undefined,
+  });
+  const outputs = useMemo(() => [photoOutput, frameOutput], [photoOutput, frameOutput]);
 
   const restart = useCallback(() => publish(startChallenge(pickSteps())), [pickSteps, publish]);
   useImperativeHandle(ref, () => ({ restart }), [restart]);
@@ -306,12 +415,8 @@ export const SelfieLivenessView = forwardRef<SelfieLivenessViewRef, SelfieLivene
       try {
         const photo = await photoOutput.capturePhotoToFile({ flashMode: 'off' }, {});
         const originalUri = toFileUri(photo.filePath);
-        const image = await ImageManipulator.manipulate(originalUri).renderAsync();
-        const crop = cropForGuide(image.width, image.height, size, size, { x: 0, y: 0, width: size, height: size });
-        const cropped = await ImageManipulator.manipulate(originalUri)
-          .crop({ originX: crop.x, originY: crop.y, width: crop.width, height: crop.height })
-          .renderAsync();
-        const saved = await cropped.saveAsync({ compress: quality, format: SaveFormat.JPEG });
+        const saved = await cropToFile(originalUri, (width, height) =>
+          cropForGuide(width, height, size, size, { x: 0, y: 0, width: size, height: size }), quality);
         const livenessScore = await scorePhoto(saved.uri);
         if (cancelled) return;
         if (livenessScore < livenessThreshold) {
@@ -319,26 +424,27 @@ export const SelfieLivenessView = forwardRef<SelfieLivenessViewRef, SelfieLivene
           return;
         }
         publish({ ...challengeRef.current, phase: 'done' });
-        onCapture({ uri: saved.uri, originalUri, livenessScore });
+        onCaptureRef.current({ uri: saved.uri, originalUri, livenessScore });
       } catch (error) {
         if (cancelled) return;
         onErrorRef.current?.({ code: 'CAPTURE_FAILED', message: error instanceof Error ? error.message : String(error) });
-        publish({ ...challengeRef.current, phase: 'centering' });
+        // Facing the camera again from the start: kept, the alignment would take the next photo at once, in a loop
+        publish({ ...challengeRef.current, phase: 'centering', alignedSince: null, misalignedSince: null, smoothed: null });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [livenessThreshold, onCapture, photoOutput, publish, quality, size, viewState.phase]);
+  }, [livenessThreshold, photoOutput, publish, quality, size, viewState.phase]);
 
   useEffect(() => {
     onStateChange?.(viewState);
   }, [viewState, onStateChange]);
 
   useEffect(() => {
-    if (!hasPermission) onError?.({ code: 'PERMISSION_DENIED', message: 'Camera permission is not granted' });
-    else if (!device) onError?.({ code: 'NO_CAMERA', message: 'No front camera on this device' });
-  }, [device, hasPermission, onError]);
+    if (camera.problem === 'PERMISSION_DENIED') onError?.({ code: 'PERMISSION_DENIED', message: 'Camera permission is not granted' });
+    else if (camera.problem === 'NO_CAMERA') onError?.({ code: 'NO_CAMERA', message: 'No front camera on this device' });
+  }, [camera.problem, onError]);
 
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -363,12 +469,12 @@ export const SelfieLivenessView = forwardRef<SelfieLivenessViewRef, SelfieLivene
               <Camera
                 style={StyleSheet.absoluteFill}
                 device={device}
-                isActive={isActive}
+                isActive={camera.isActive}
                 outputs={outputs}
                 resizeMode="cover"
                 onStarted={() => setIsCameraReady(true)}
                 onStopped={() => setIsCameraReady(false)}
-                onError={(error) => onError?.({ code: 'NO_CAMERA', message: error.message })}
+                onError={(error) => onError?.({ code: 'CAMERA_FAILED', message: error.message })}
               />
             ) : null}
           </View>

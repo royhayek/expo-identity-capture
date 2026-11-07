@@ -526,12 +526,13 @@ export function scoreLiveness(
     if (DEBUG_LOGGING) {
       console.log(`[Liveness] Invalid buffer size: expected ${expectedSize}, got ${imageBuffer.length}`);
     }
+    // Nothing could be checked: never a pass (a pass on unreadable data is a bypass)
     return {
-      isLive: true,
-      overallScore: 0.5,
-      confidence: 0.1,
+      isLive: false,
+      overallScore: 0,
+      confidence: 0,
       methodResults: [],
-      summary: 'Invalid image data - defaulting to pass',
+      summary: 'Invalid image data - not checked',
       processingTimeMs: Date.now() - startTime,
     };
   }
@@ -582,8 +583,9 @@ export function scoreLiveness(
     weightedConfidence += result.confidence * weight;
   });
 
-  // Normalize
-  const overallScore = totalWeight > 0 ? weightedScore / totalWeight : 0.5;
+  // Normalize: each score weighs by its method's weight and its own confidence, so the sum is divided by both (dividing
+  // by the weights alone caps a perfect image at the average confidence, ~0.6, under the 0.5 threshold's margin)
+  const overallScore = weightedConfidence > 0 ? weightedScore / weightedConfidence : 0;
   const confidence = totalWeight > 0 ? weightedConfidence / totalWeight : 0.5;
   const isLive = overallScore >= config.livenessThreshold;
 
