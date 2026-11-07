@@ -1,7 +1,7 @@
 {
   "name": "expo-identity-capture",
   "version": "2.2.0",
-  "description": "React Native package for capturing ID documents and selfies in Expo prebuild apps",
+  "description": "Identity document and selfie capture for Expo / React Native apps: live document scanning with auto capture, on-device MRZ reading, and a head-turn selfie liveness check.",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
@@ -18,9 +18,14 @@
     "capture",
     "camera",
     "document",
-    "selfie"
+    "selfie",
+    "kyc",
+    "mrz",
+    "ocr",
+    "liveness",
+    "vision-camera"
   ],
-  "author": "Your Name",
+  "author": "Roy El Hayek",
   "license": "MIT",
   "peerDependencies": {
     "expo": ">=57.0.0",
@@ -66,12 +71,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/expo-identity-capture.git"
+    "url": "git+https://github.com/royhayek/expo-identity-capture.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/expo-identity-capture/issues"
+    "url": "https://github.com/royhayek/expo-identity-capture/issues"
   },
-  "homepage": "https://github.com/your-username/expo-identity-capture#readme",
+  "homepage": "https://github.com/royhayek/expo-identity-capture#readme",
   "dependencies": {
     "react-native-size-matters": "^0.4.2"
   },
