@@ -55,9 +55,9 @@ export type {
   NormalizedExtractedData,
 } from "./services/DataNormalizer";
 
-// On-device document reading (ML Kit OCR + MRZ); needs react-native-vision-camera-mlkit
+// On-device document reading (platform text recognition + MRZ); needs expo-text-extractor
 export { readIdentityDocument, readingFromText, normalizeMrzCountry } from "./services/DocumentReader";
-export type { IdentityDocumentReading, DocumentReaderError } from "./services/DocumentReader";
+export type { IdentityDocumentReading, DocumentReaderError, ReadIdentityDocumentOptions } from "./services/DocumentReader";
 
 // OCR Field Extraction
 export { extractFieldsFromOCR } from "./services/OCRFieldExtractor";
@@ -107,8 +107,13 @@ export type {
   DocumentScanStatus,
   DocumentScanResult,
   DocumentScanError,
+  DocumentPhotoCheck,
 } from "./components/DocumentScanView";
 export { SelfieLivenessView, toFaceSample } from "./components/SelfieLivenessView";
+export { createFacePoseDetector } from "./core/FacePoseDetector";
+export type { FacePose, FacePoseDetector } from "./core/FacePoseDetector";
+export { documentTextRecognizer } from "./core/DocumentTextRecognizer";
+export type { DocumentTextRecognizer, RecognizedTextLine, TextRegion } from "./core/DocumentTextRecognizer";
 export type {
   SelfieLivenessViewProps,
   SelfieLivenessViewRef,

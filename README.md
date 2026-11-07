@@ -60,7 +60,7 @@ const result = await IdentityCapture.captureAndExtract({
 - **Civil Registers** - Birth certificate processing
 
 ### 🧠 Intelligence Features
-- **OCR Text Extraction** - ML Kit powered text recognition
+- **OCR Text Extraction** - on-device text recognition (Apple Vision on iOS, ML Kit via Google Play services on Android) and MRZ parsing
 - **Document Detection** - Automatic document type identification
 - **Quality Assessment** - Blur, glare, and brightness analysis
 - **Field Validation** - Smart validation of extracted data
@@ -104,7 +104,16 @@ npx expo install react-native-worklets react-native-nitro-modules
 # Camera, frame processing and document scanning
 npm install react-native-vision-camera react-native-vision-camera-worklets react-native-nitro-image \
   react-native-fast-opencv react-native-document-scanner-plugin
+
+# Optional: only for an app whose native code predates 2.5 (readIdentityDocument falls back to it)
+npx expo install expo-text-extractor
 ```
+
+`readIdentityDocument` reads with the package's own native recognizer (`documentTextRecognizer`), set up for
+documents: **Apple Vision on iOS** in accurate mode with language correction off (it rewrites an MRZ), **ML Kit
+through Google Play services on Android**. It reads the whole photo, then, without a valid MRZ, the photo's bottom
+half again at a higher resolution; MRZ pieces read apart on one row are joined back. Rebuild the app's native code
+after upgrading to 2.5 (`npx expo prebuild`, `pod install`).
 
 | Peer | Version |
 | --- | --- |
@@ -180,6 +189,18 @@ status text, buttons) and follows their state.
 The back camera in a rounded viewport, a frame guide for an ID-1 card or an upright passport page with the outside
 dimmed, OpenCV edge detection, and a photo taken on its own once the document holds still, cropped to the guide.
 
+A photo taken on its own is handed back only once it holds what the document holds (`photoCheck`), so a door, a
+screen or a table never passes for one:
+
+| `photoCheck` | Handed back when | Default for |
+| --- | --- | --- |
+| `'mrz'` | a valid MRZ is read off it, every check digit passing (`result.reading` carries it) | `docType="passport"` |
+| `'text'` | it holds `minTextLines` lines of text (default 4) | any other `docType` |
+| `'none'` | the outline alone | |
+
+A photo that fails is dropped silently (automatic attempts make no shutter sound: mark the kept photo yourself, with
+a haptic) and the scan carries on. The manual shutter, `capture()`, is never checked.
+
 ```tsx
 const scanRef = useRef<DocumentScanViewRef>(null);
 
@@ -189,17 +210,34 @@ const scanRef = useRef<DocumentScanViewRef>(null);
   style={{ width: 362, height: 400 }}
   accentColor="#55D4C9"             // the guide once found
   onStatusChange={setStatus}        // 'starting' | 'searching' | 'found' | 'capturing'
-  onCapture={({ uri, originalUri }) => upload(uri)}
-  onError={({ code }) => {}}        // 'PERMISSION_DENIED' | 'NO_CAMERA' | 'CAPTURE_FAILED'
+  onCapture={({ uri, originalUri, reading }) => upload(uri)}
+  onError={({ code }) => {}}        // 'PERMISSION_DENIED' | 'NO_CAMERA' | 'CAMERA_FAILED' | 'CAPTURE_FAILED'
 />
 <Button title="Take photo" onPress={() => scanRef.current?.capture()} />
 ```
 
+Both camera views ask for the camera permission the first time (`PERMISSION_DENIED` only once it was refused, or is
+restricted), wait for the platform to list its cameras before `NO_CAMERA`, pause while the app is in the background,
+and report `CAMERA_FAILED` when the camera stops on its own (another app, a call). Photos are capped at about 11 MP
+(documents) and 2.8 MP (selfies), and frames are analysed on a timer, so 30 and 60 fps phones behave alike.
+
+### Android: ML Kit models
+
+Face detection and text recognition come from Google Play services by default: nothing in the APK, and the models
+are requested as soon as the module loads so they are there for the first scan. For phones without Play services
+(Huawei, some AOSP builds), bundle them instead (about 7 MB per ABI), in the app's `android/gradle.properties`:
+
+```properties
+ExpoIdentityCapture_bundledMlKit=true
+```
+
 ### `SelfieLivenessView`
 
-The front camera in a circle ringed by bars, a head-turn challenge (left, right, up in a shuffled order; ML Kit face
-angles via `react-native-vision-camera-face-detector`), then a photo taken on its own once the face is back in front
-of the camera. The photo goes through the passive check (`scoreLiveness`: a printed photo or a screen) before it is
+The front camera in a circle ringed by bars, a head-turn challenge (left, right, up in a shuffled order), then a
+photo taken on its own once the face is back in front of the camera. Head angles come from the package's own
+native face detector (`createFacePoseDetector`, a VisionCamera frame processor): **Apple Vision on iOS** (built into
+the OS, nothing bundled, works on simulators) and **ML Kit through Google Play services on Android**.
+The photo goes through the passive check (`scoreLiveness`: a printed photo or a screen) before it is
 handed back; under `livenessThreshold` the state becomes `notLive` and `restart()` starts over.
 
 ```tsx
@@ -213,8 +251,9 @@ handed back; under `livenessThreshold` the state becomes `notLive` and `restart(
 ```
 
 The challenge itself (`advanceChallenge`, `startChallenge`) is a pure state machine you can test and tune
-(`challenge={{ yawThreshold: 25, pitchThreshold: 15, yawSign: 1 }}`). **Check `yawSign` on a device**: it decides
-which way ML Kit's yaw counts as the customer's left on the mirrored preview.
+(`challenge={{ yawThreshold: 25, pitchThreshold: 15, yawSign: 1, pitchSign: 1 }}`). **Check `yawSign` and `pitchSign`
+on a device**: they decide which way the detector's yaw counts as the customer's left on the mirrored preview, and
+which way its pitch counts as up.
 
 Both need the camera permission granted before they mount. The passive check is a heuristic, not certified
 presentation-attack detection.
@@ -2044,7 +2083,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 Built with:
 - [Expo](https://expo.dev) - React Native development platform
 - [React Native Vision Camera](https://github.com/mrousavy/react-native-vision-camera) - Camera functionality
-- [ML Kit](https://developers.google.com/ml-kit) - Text recognition
+- [expo-text-extractor](https://github.com/pchalupa/expo-text-extractor) - On-device text recognition
 - [React Native Document Scanner](https://github.com/Michaelvilleneuve/react-native-document-scanner-plugin) - Document scanning
 
 ---
