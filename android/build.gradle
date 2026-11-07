@@ -1,0 +1,142 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.12.0"
+  }
+}
+
+def reactNativeArchitectures() {
+  def value = rootProject.getProperties().get("reactNativeArchitectures")
+  return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
+}
+
+apply plugin: "com.android.library"
+if (project.extensions.findByName("kotlin") == null) {
+  apply plugin: "org.jetbrains.kotlin.android"
+}
+
+apply from: "../nitrogen/generated/android/ExpoIdentityCapture+autolinking.gradle"
+apply from: "./fix-prefab.gradle"
+
+def getExtOrDefault(name) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties["ExpoIdentityCapture_" + name]
+}
+
+/**
+ * `ExpoIdentityCapture_bundledMlKit=true` (gradle.properties) bundles ML Kit's face and text models in the app (about
+ * 7 MB per ABI) instead of taking them from Google Play services: for phones without Play services (Huawei, some
+ * AOSP builds) */
+def bundledMlKit() {
+  return (getExtOrDefault("bundledMlKit") ?: "false").toString().toBoolean()
+}
+
+def getExtOrIntegerDefault(name) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["ExpoIdentityCapture_" + name]).toInteger()
+}
+
+android {
+  namespace "com.margelo.nitro.identitycapture"
+
+  ndkVersion getExtOrDefault("ndkVersion")
+  compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+
+  defaultConfig {
+    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
+    targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+    buildConfigField "boolean", "BUNDLED_MLKIT", bundledMlKit().toString()
+
+    externalNativeBuild {
+      cmake {
+        cppFlags "-frtti -fexceptions -Wall -Wextra -fstack-protector-all"
+        arguments "-DANDROID_STL=c++_shared", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+        abiFilters(*reactNativeArchitectures())
+        buildTypes {
+          debug {
+            cppFlags "-O1 -g"
+          }
+          release {
+            cppFlags "-O2"
+          }
+        }
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+    }
+  }
+
+  buildFeatures {
+    buildConfig true
+  }
+
+  packagingOptions {
+    // Provided by React Native, Nitro and VisionCamera: never packaged twice
+    excludes = [
+      "META-INF",
+      "META-INF/**",
+      "**/libc++_shared.so",
+      "**/libNitroModules.so",
+      "**/libfbjni.so",
+      "**/libjsi.so",
+      "**/libfolly_json.so",
+      "**/libfolly_runtime.so",
+      "**/libglog.so",
+      "**/libhermes.so",
+      "**/libhermes-executor-debug.so",
+      "**/libhermes_executor.so",
+      "**/libreactnative.so",
+      "**/libreactnativejni.so",
+      "**/libturbomodulejsijni.so",
+      "**/libreact_nativemodule_core.so",
+      "**/libjscexecutor.so"
+    ]
+  }
+
+  buildFeatures {
+    buildConfig true
+    prefab true
+  }
+
+  buildTypes {
+    release {
+      minifyEnabled false
+    }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+repositories {
+  mavenCentral()
+  google()
+}
+
+dependencies {
+  compileOnly "com.facebook.react:react-android"
+  compileOnly project(":react-native-nitro-modules")
+  compileOnly project(":react-native-vision-camera")
+  // The frame's ImageProxy: the version VisionCamera ships, provided by it at runtime
+  compileOnly "androidx.camera:camera-core:1.7.0-alpha03"
+  implementation "androidx.annotation:annotation:1.9.1"
+  if (bundledMlKit()) {
+    // The models in the APK: works without Google Play services
+    implementation "com.google.mlkit:face-detection:16.1.7"
+    implementation "com.google.mlkit:text-recognition:16.0.1"
+  } else {
+    // Face detection and text recognition through Google Play services: the models come with Play services, not in
+    // the APK (requested as the module loads, MlKitModels)
+    implementation "com.google.android.gms:play-services-mlkit-face-detection:17.1.0"
+    implementation "com.google.android.gms:play-services-mlkit-text-recognition:19.0.1"
+  }
+  // ModuleInstall (MlKitModels): compiled either way, used only with the Play services models
+  implementation "com.google.android.gms:play-services-base:18.5.0"
+}

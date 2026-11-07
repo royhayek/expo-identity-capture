@@ -1,0 +1,42 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": [
+    "identitycapture"
+  ],
+  "ios": {
+    "iosModuleName": "ExpoIdentityCapture"
+  },
+  "android": {
+    "androidNamespace": [
+      "identitycapture"
+    ],
+    "androidCxxLibName": "ExpoIdentityCapture"
+  },
+  "autolinking": {
+    "FacePoseDetectorFactory": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridFacePoseDetectorFactory"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridFacePoseDetectorFactory"
+      }
+    },
+    "DocumentTextRecognizer": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridDocumentTextRecognizer"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridDocumentTextRecognizer"
+      }
+    }
+  },
+  "ignorePaths": [
+    "**/node_modules",
+    "lib",
+    "demo"
+  ]
+}
