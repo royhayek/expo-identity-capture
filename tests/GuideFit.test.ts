@@ -41,3 +41,25 @@ describe('sitsInGuide', () => {
     expect(sitsInGuide(outline(360 - pageW / 2, 640 - pageH * 1.5, pageW, pageH * 2), 720, 1280, upright)).toBe(false);
   });
 });
+
+describe('the frames analysed, framed like the preview', () => {
+  const resolutionOn = (os: string): { width: number; height: number } => {
+    let resolution = { width: 0, height: 0 };
+    jest.isolateModules(() => {
+      require('react-native').Platform.OS = os;
+      resolution = require('../src/utils/guide').FRAME_RESOLUTION;
+    });
+    return resolution;
+  };
+
+  // CameraX frames each output on its own and its preview is 4:3: 16:9 frames held upright showed 3/4 of the width the
+  // customer saw, and an ID card filling the guide (about 0.85 of it) had its edges outside them
+  it('asks Android for 4:3 frames, like its preview', () => {
+    const { width, height } = resolutionOn('android');
+    expect(width / height).toBeCloseTo(4 / 3);
+  });
+
+  it('keeps iOS as it was: one capture format feeds the preview and the frames', () => {
+    expect(resolutionOn('ios')).toEqual({ width: 1280, height: 720 });
+  });
+});

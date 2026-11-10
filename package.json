@@ -1,6 +1,6 @@
 {
   "name": "expo-identity-capture",
-  "version": "2.7.0",
+  "version": "2.7.6",
   "description": "Identity document and selfie capture for Expo / React Native apps: live document scanning with auto capture, on-device MRZ reading, and a head-turn selfie liveness check.",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

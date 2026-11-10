@@ -6,16 +6,26 @@
  * @module guide
  */
 
+import { Platform } from 'react-native';
+
 import type { VerifiedDocType } from '../types/extraction';
 
 /** Width / height of the guide: ID-1 card (85.6 × 54 mm), passport page held upright (88 × 125 mm) */
 const GUIDE_RATIO = { card: 1.586, passport: 0.704 };
 /** Space between the guide and the viewport's edge */
 const GUIDE_INSET = 28;
+/**
+ * The frames the camera views analyse, framed like their preview. iOS feeds the preview, the frames and the photo from
+ * one capture format, so they show the same view whatever their size. Android (CameraX) frames each output on its own,
+ * and its preview is 4:3: frames asked at 16:9 showed less of the scene's width than the customer saw, and an ID card
+ * filling the guide had its edges outside them, never detected
+ */
+export const FRAME_RESOLUTION = Platform.OS === 'android' ? { width: 1280, height: 960 } : { width: 1280, height: 720 };
+
 /** Corner radius of the guide as drawn */
 export const GUIDE_RADIUS = 16;
 /** Extra room kept around the guide when cropping, for the preview and the photo framing differently */
-const CROP_MARGIN = 0.06;
+export const CROP_MARGIN = 0.06;
 interface Box {
   x: number;
   y: number;

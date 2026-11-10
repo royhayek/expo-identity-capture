@@ -20,7 +20,9 @@ import {
   MorphShapes,
   BorderTypes,
   InterpolationFlags,
+  RotateFlags,
 } from 'react-native-fast-opencv';
+import { Platform } from 'react-native';
 import type { Frame } from 'react-native-vision-camera';
 import type { VerifiedDocType } from '../types/extraction';
 
@@ -460,6 +462,107 @@ export interface ProcessingBuffer {
 const RGB_CHANNELS = 4;
 
 /**
+ * Android hands a frame's pixels over from its plane: the frame's own buffer is a HardwareBuffer there, which Nitro
+ * can only wrap in apps built for Android 8 at least (minSdk 26), and threw on every frame otherwise, so no document
+ * was ever detected. The plane wraps the same pixels as a plain buffer. iOS reads the frame's buffer as it is
+ */
+const PIXELS_FROM_PLANE = Platform.OS === 'android';
+
+/** A non-planar frame's pixels and the bytes of each of its rows, read where the platform hands them over */
+function framePixels(frame: Frame): { pixels: ArrayBuffer; bytesPerRow: number } {
+  'worklet';
+  if (PIXELS_FROM_PLANE) {
+    const [plane] = frame.getPlanes();
+    if (plane) return { pixels: plane.getPixelBuffer(), bytesPerRow: plane.bytesPerRow };
+  }
+  return { pixels: frame.getPixelBuffer(), bytesPerRow: frame.bytesPerRow };
+}
+
+/** A frame's pixels without the padding some rows carry past its width */
+function packedPixels(pixels: ArrayBuffer, width: number, height: number, bytesPerRow: number): Uint8Array {
+  'worklet';
+  const rowBytes = width * RGB_CHANNELS;
+  const raw = new Uint8Array(pixels);
+  if (bytesPerRow === rowBytes) return raw;
+  const packed = new Uint8Array(rowBytes * height);
+  for (let row = 0; row < height; row++) {
+    packed.set(raw.subarray(row * bytesPerRow, row * bytesPerRow + rowBytes), row * rowBytes);
+  }
+  return packed;
+}
+
+/** The guide's part of a frame, upright: 4-channel pixels, to save as an image and read */
+export interface GuidePixels {
+  buffer: ArrayBuffer;
+  width: number;
+  height: number;
+  pixelFormat: 'BGRA' | 'RGBA';
+}
+
+/**
+ * The part of the frame inside the guide (with `margin` around it, a share of the guide), turned upright: what the
+ * photo will hold, read before it is taken. The guide is centred in the view and the preview covers it, so the crop is
+ * centred in the frame too, whatever its quarter turn.
+ *
+ * @returns null when the frame has no CPU-readable RGB pixels
+ */
+export function frameGuidePixels(
+  frame: Frame,
+  { view, guide }: Pick<GuideFrame, 'view' | 'guide'>,
+  margin: number,
+  clockwise: 'left' | 'right'
+): GuidePixels | null {
+  'worklet';
+
+  const { width, height, pixelFormat, orientation } = frame;
+  if (!frame.hasPixelBuffer || frame.isPlanar || width === 0 || height === 0) return null;
+  if (pixelFormat !== 'rgb-bgra-8-bit' && pixelFormat !== 'rgb-rgba-8-bit') return null;
+
+  const sideways = orientation === 'left' || orientation === 'right';
+  const uprightWidth = sideways ? height : width;
+  const uprightHeight = sideways ? width : height;
+  const scale = Math.max(view.width / uprightWidth, view.height / uprightHeight);
+  const cropWidth = Math.min(uprightWidth, (guide.width * (1 + margin * 2)) / scale);
+  const cropHeight = Math.min(uprightHeight, (guide.height * (1 + margin * 2)) / scale);
+  const bufferWidth = Math.floor(sideways ? cropHeight : cropWidth);
+  const bufferHeight = Math.floor(sideways ? cropWidth : cropHeight);
+
+  const { pixels, bytesPerRow } = framePixels(frame);
+  const all = OpenCV.Mat.createFromBuffer('uint8', height, width, RGB_CHANNELS, packedPixels(pixels, width, height, bytesPerRow));
+  const cropped = OpenCV.Mat.create(0, 0, DataTypes.CV_8UC4);
+  OpenCV.crop(
+    all,
+    cropped,
+    OpenCV.Rect.create(Math.floor((width - bufferWidth) / 2), Math.floor((height - bufferHeight) / 2), bufferWidth, bufferHeight)
+  );
+  all.release();
+  // A quarter turn off: `clockwise` is the flag of pixels upright once turned clockwise, which the platforms name apart
+  // (Android: CameraX's 90° of rotation, read as `left`); the other quarter turn the other way
+  let upright = cropped;
+  if (orientation !== 'up') {
+    upright = OpenCV.Mat.create(0, 0, DataTypes.CV_8UC4);
+    OpenCV.rotate(
+      cropped,
+      upright,
+      orientation === 'down'
+        ? RotateFlags.ROTATE_180
+        : orientation === clockwise
+          ? RotateFlags.ROTATE_90_CLOCKWISE
+          : RotateFlags.ROTATE_90_COUNTERCLOCKWISE
+    );
+    cropped.release();
+  }
+  const { buffer, cols, rows } = upright.toBuffer('uint8');
+  upright.release();
+  return {
+    buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
+    width: cols,
+    height: rows,
+    pixelFormat: pixelFormat === 'rgb-bgra-8-bit' ? 'BGRA' : 'RGBA',
+  };
+}
+
+/**
  * Converts a VisionCamera frame into a small BGR buffer for {@link detectDocumentWithOpenCV} and liveness detection.
  *
  * The frame output must stream `'rgb'` (`rgb-bgra-8-bit` on iOS, `rgb-rgba-8-bit` on Android). Rows padded past the
@@ -470,7 +573,7 @@ const RGB_CHANNELS = 4;
 export function frameToProcessingBuffer(frame: Frame, targetLongSide: number = 480): ProcessingBuffer | null {
   'worklet';
 
-  const { width, height, bytesPerRow, pixelFormat } = frame;
+  const { width, height, pixelFormat } = frame;
   if (!frame.hasPixelBuffer || frame.isPlanar || width === 0 || height === 0) {
     return null;
   }
@@ -478,15 +581,8 @@ export function frameToProcessingBuffer(frame: Frame, targetLongSide: number = 4
     return null;
   }
 
-  const rowBytes = width * RGB_CHANNELS;
-  const raw = new Uint8Array(frame.getPixelBuffer());
-  let packed = raw;
-  if (bytesPerRow !== rowBytes) {
-    packed = new Uint8Array(rowBytes * height);
-    for (let row = 0; row < height; row++) {
-      packed.set(raw.subarray(row * bytesPerRow, row * bytesPerRow + rowBytes), row * rowBytes);
-    }
-  }
+  const { pixels, bytesPerRow } = framePixels(frame);
+  const packed = packedPixels(pixels, width, height, bytesPerRow);
 
   const scale = Math.min(1, targetLongSide / Math.max(width, height));
   const outWidth = Math.floor(width * scale);
@@ -578,6 +674,22 @@ export function detectDocumentWithOpenCV(
     // Apply Canny edge detection
     const edges = OpenCV.Mat.create(0, 0, DataTypes.CV_8U);
     OpenCV.Canny(blurred, edges, cfg.cannyLowThreshold, cfg.cannyHighThreshold);
+
+    // The edges of colour too: a light card on a light desk is as bright as the desk, but grey against its wood (measured
+    // on a frame: the card's lower edge read nowhere in brightness, along its whole length in saturation)
+    const hsv = OpenCV.Mat.create(0, 0, DataTypes.CV_8UC3);
+    OpenCV.cvtColor(src, hsv, ColorConversionCodes.COLOR_BGR2HSV);
+    const saturation = OpenCV.Mat.create(0, 0, DataTypes.CV_8U);
+    OpenCV.extractChannel(hsv, saturation, 1);
+    const saturationBlurred = OpenCV.Mat.create(0, 0, DataTypes.CV_8U);
+    OpenCV.GaussianBlur(saturation, saturationBlurred, blurKernel, 0);
+    const colourEdges = OpenCV.Mat.create(0, 0, DataTypes.CV_8U);
+    OpenCV.Canny(saturationBlurred, colourEdges, cfg.cannyLowThreshold, cfg.cannyHighThreshold);
+    OpenCV.bitwise_or(edges, colourEdges, edges);
+    hsv.release();
+    saturation.release();
+    saturationBlurred.release();
+    colourEdges.release();
 
     // Dilate edges to close gaps
     const dilationKernel = OpenCV.getStructuringElement(

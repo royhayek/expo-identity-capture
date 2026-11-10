@@ -53,4 +53,18 @@ export function rowsOf(lines: readonly RecognizedTextLine[]): string[] {
   );
 }
 
+/** A line of a document: a word or a number of 3 characters at least, not a speck the recognizer read as a letter */
+const TEXT_LINE = /[A-Za-z0-9\u00C0-\u024F\u0600-\u06FF]{3,}/;
+/** A row of an MRZ (30, 36 or 44 characters, read with a slip or two), its fillers in it */
+const MRZ_ROW = /^(?=.*<)[A-Z0-9<]{25,}$/;
+
+/**
+ * Whether recognized lines are a document's: enough lines of text, or an MRZ. The back of an ID card is mostly its
+ * three MRZ rows, its other print (Arabic, a barcode) often unread: by lines alone it was dropped again and again
+ */
+export function holdsDocumentText(lines: readonly RecognizedTextLine[], minLines: number): boolean {
+  if (lines.filter((line) => TEXT_LINE.test(line.text)).length >= minLines) return true;
+  return rowsOf(lines).filter((row) => MRZ_ROW.test(row.replace(/\s/g, ''))).length >= 2;
+}
+
 export type { DocumentTextRecognizer, RecognizedTextLine, TextRegion } from '../specs/DocumentText.nitro';

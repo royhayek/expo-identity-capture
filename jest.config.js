@@ -8,6 +8,7 @@ module.exports = {
   moduleNameMapper: {
     '^react-native-nitro-modules$': '<rootDir>/tests/stubs/nitro-modules.js',
     '^react-native-fast-opencv$': '<rootDir>/tests/stubs/fast-opencv.js',
+    '^react-native$': '<rootDir>/tests/stubs/react-native.js',
   },
   globals: { __DEV__: false },
 };

@@ -30,9 +30,34 @@ describe('facing the camera again, before the photo', () => {
   });
 
   it('holds it back while the head is still turned or tilted', () => {
-    expect(capturesAt(() => face({ yaw: 15 }))).toBeNull();
-    expect(capturesAt(() => face({ pitch: 20 }))).toBeNull();
-    expect(capturesAt(() => face({ pitch: -20 }))).toBeNull();
+    const settling = DEFAULT_CHALLENGE_CONFIG.centeringTimeoutMs;
+    expect(capturesAt(() => face({ yaw: 15 }), centering(), settling)).toBeNull();
+    expect(capturesAt(() => face({ pitch: 20 }), centering(), settling)).toBeNull();
+    expect(capturesAt(() => face({ pitch: -20 }), centering(), settling)).toBeNull();
+    // Far from facing the camera, never
+    expect(capturesAt(() => face({ yaw: 30 }))).toBeNull();
+    expect(capturesAt(() => face({ pitch: 35 }))).toBeNull();
+  });
+
+  it('never leaves a customer stuck: a head that won’t settle is taken with a wider tolerance', () => {
+    const at = capturesAt(() => face({ yaw: 12, pitch: 18 }));
+    expect(at).not.toBeNull();
+    expect(at).toBeGreaterThanOrEqual(DEFAULT_CHALLENGE_CONFIG.centeringTimeoutMs);
+  });
+
+  // The phone held close after the turns: the face fills the circle, the box reads 0.95 and more. It was taken for a
+  // face that left the circle ("centre your face") until the customer pushed the phone away
+  it('takes it with the face filling the circle', () => {
+    expect(capturesAt(() => face({ size: 0.98 }))).toBe(DEFAULT_CHALLENGE_CONFIG.alignMs);
+    expect(capturesAt(() => face({ size: 1.04 }))).toBe(DEFAULT_CHALLENGE_CONFIG.alignMs);
+  });
+
+  it('asks to move back, not to centre, when the circle would cut the face', () => {
+    let state = centering();
+    for (let t = 0; t < 4000; t += 100) state = advanceChallenge(state, face({ size: 1.2 }), t);
+    expect(state).toMatchObject({ phase: 'centering', hint: 'tooClose' });
+    for (let t = 4000; t < 5000 && state.phase !== 'capturing'; t += 100) state = advanceChallenge(state, face({ size: 0.9 }), t);
+    expect(state.phase).toBe('capturing');
   });
 
   it('holds it back with the face out of the circle, or too far', () => {
@@ -49,6 +74,16 @@ describe('the turns', () => {
     expect(state.phase).toBe('challenge');
     for (let t = 800; t <= 1400; t += 100) state = advanceChallenge(state, face({ yaw: 5 + 16 }), t);
     expect(state.phase).toBe('centering');
+  });
+
+  it('keeps a face held close in the challenge, and says why a too-close face doesn’t start it', () => {
+    let state: LivenessChallengeState = startChallenge(['left']);
+    for (let t = 0; t <= 700; t += 100) state = advanceChallenge(state, face({ size: 0.95 }), t);
+    expect(state).toMatchObject({ phase: 'positioning', hint: 'tooClose' });
+    for (let t = 800; t <= 1500; t += 100) state = advanceChallenge(state, face(), t);
+    expect(state).toMatchObject({ phase: 'challenge', hint: null });
+    for (let t = 1600; t <= 4000; t += 100) state = advanceChallenge(state, face({ size: 1.1 }), t);
+    expect(state.phase).toBe('challenge');
   });
 
   it('does not count the resting pose as a turn', () => {

@@ -31,6 +31,7 @@ import {
   type LivenessChallengeConfig,
   type LivenessChallengeState,
   type LivenessDirection,
+  type LivenessHint,
   type LivenessPhase,
 } from '../services/LivenessChallenge';
 import { useCameraAccess } from '../hooks/useCameraAccess';
@@ -38,6 +39,7 @@ import { scoreLiveness } from '../services/LivenessDetection';
 import { createFacePoseDetector, type FacePose, type FacePoseDetector } from '../core/FacePoseDetector';
 import { cropToFile } from '../utils/cropToFile';
 import { cropForGuide } from './DocumentScanView';
+import { FRAME_RESOLUTION } from '../utils/guide';
 import { toFileUri } from '../utils/fileUri';
 
 // ============================================================================
@@ -54,6 +56,11 @@ export interface SelfieLivenessState {
   completed: LivenessDirection[];
   /** How far the current direction is (0-1) */
   progress: number;
+  /**
+   * Why the face doesn't count yet, for the copy: `tooClose` ("move the phone a little further"), `tooFar`,
+   * `offCentre`, `turned` ("look straight at the camera"). Null when nothing is wrong
+   */
+  hint: LivenessHint | null;
 }
 
 export interface SelfieLivenessResult {
@@ -138,8 +145,8 @@ const PROGRESS_STEP = 0.05;
 const FRAME_PROCESSING = {
   /** Look for the face about 10 times a second, whatever the camera's frame rate (30 or 60 fps) */
   INTERVAL_MS: 100,
-  /** Faces are small enough at preview size; the detectors scale down further themselves */
-  TARGET_RESOLUTION: { width: 1280, height: 720 },
+  /** Faces are small enough at preview size; the detectors scale down further themselves. Framed like the preview */
+  TARGET_RESOLUTION: FRAME_RESOLUTION,
 };
 
 // ============================================================================
@@ -243,12 +250,14 @@ const viewStateOf = (challenge: LivenessChallengeState): SelfieLivenessState => 
   steps: challenge.steps,
   completed: challenge.completed,
   progress: Math.round(challenge.progress / PROGRESS_STEP) * PROGRESS_STEP,
+  hint: challenge.hint,
 });
 
 const sameViewState = (a: SelfieLivenessState, b: SelfieLivenessState) =>
   a.phase === b.phase &&
   a.direction === b.direction &&
   a.progress === b.progress &&
+  a.hint === b.hint &&
   a.completed.length === b.completed.length &&
   a.steps.join() === b.steps.join();
 

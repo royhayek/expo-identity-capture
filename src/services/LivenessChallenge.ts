@@ -31,6 +31,12 @@ export type LivenessPhase =
   /** The photo was handed back */
   | 'done';
 
+/**
+ * Why the face doesn't count yet, for the host's copy: `tooClose` and `tooFar` mean the phone's distance, `offCentre`
+ * the face outside the circle, `turned` the head not facing the camera after the turns. Null when nothing is wrong
+ */
+export type LivenessHint = 'tooClose' | 'tooFar' | 'offCentre' | 'turned';
+
 /** One frame's face, normalised: angles in degrees, centre and size relative to the frame */
 export interface FaceSample {
   /** Head turned sideways, in degrees, as the preview shows it */
@@ -75,6 +81,11 @@ export interface LivenessChallengeConfig {
   centredPitchDegrees: number;
   /** How long the face must stay centred and straight before the photo is taken (ms) */
   alignMs: number;
+  /**
+   * After this long facing the camera again without settling (ms), the straight check takes twice its tolerance: the
+   * turns already proved a live face, a customer must never be left stuck on the last step
+   */
+  centeringTimeoutMs: number;
   /** A misaligned reading shorter than this (ms) doesn't restart `alignMs`: one noisy frame isn't a moved head */
   alignGraceMs: number;
   /** How much each new reading weighs in the smoothed pose that the straight check reads (0-1) */
@@ -129,6 +140,10 @@ export interface LivenessChallengeState {
   wrongSince: number | null;
   /** Wrong turns made in this challenge */
   wrongTurns: number;
+  /** Since when the turns have been done and the face is to come back to the centre */
+  centeringSince: number | null;
+  /** Why the face doesn't count yet, or null */
+  hint: LivenessHint | null;
 }
 
 // ============================================================================
@@ -148,6 +163,7 @@ export const DEFAULT_CHALLENGE_CONFIG: LivenessChallengeConfig = {
   centredDegrees: 8,
   centredPitchDegrees: 14,
   alignMs: 800,
+  centeringTimeoutMs: 3000,
   alignGraceMs: 300,
   smoothing: 0.35,
   wrongTurnAt: 0.8,
@@ -157,9 +173,15 @@ export const DEFAULT_CHALLENGE_CONFIG: LivenessChallengeConfig = {
   pitchSign: 1,
 };
 
-/** Where a face has to sit to start (centred, close enough), and the looser bounds while it turns (a turned face moves) */
+/**
+ * Where a face has to sit to start (centred, close enough), and the looser bounds while it turns (a turned face moves).
+ * A face held close reads 0.9 and more (Apple Vision's box is wider than the face): while turning it is still the
+ * customer's face, not one that left the circle, so only the photo caps its size (CAPTURE_MAX_SIZE)
+ */
 const START_BOUNDS = { x: 0.2, y: 0.25, minSize: 0.2, maxSize: 0.9 };
-const TURNING_BOUNDS = { x: 0.35, y: 0.35, minSize: 0.12, maxSize: 0.95 };
+const TURNING_BOUNDS = { x: 0.35, y: 0.35, minSize: 0.12, maxSize: 1.4 };
+/** The largest face the photo is taken with: larger, the circle cuts off its chin or forehead */
+const CAPTURE_MAX_SIZE = 1.05;
 
 // ============================================================================
 // State machine
@@ -193,6 +215,8 @@ export function startChallenge(steps: LivenessDirection[]): LivenessChallengeSta
     smoothed: null,
     wrongSince: null,
     wrongTurns: 0,
+    centeringSince: null,
+    hint: null,
   };
 }
 
@@ -206,6 +230,16 @@ export function isFaceInCircle(face: FaceSample | null, turning = false): face i
     face.size >= bounds.minSize &&
     face.size <= bounds.maxSize
   );
+}
+
+/** What keeps a face from counting as in the circle, or null when it does */
+export function faceHint(face: FaceSample | null, turning = false): Exclude<LivenessHint, 'turned'> | null {
+  const bounds = turning ? TURNING_BOUNDS : START_BOUNDS;
+  if (face === null) return null;
+  if (face.size > bounds.maxSize) return 'tooClose';
+  if (face.size < bounds.minSize) return 'tooFar';
+  if (Math.abs(face.centerX - 0.5) > bounds.x || Math.abs(face.centerY - 0.5) > bounds.y) return 'offCentre';
+  return null;
 }
 
 /** How far a face is turned in a direction from the customer's neutral, 0-1 */
@@ -251,6 +285,7 @@ function completeStep(state: LivenessChallengeState, now: number): LivenessChall
         misalignedSince: null,
         smoothed: null,
         phase: 'centering',
+        centeringSince: now,
         resume: null,
       }
     : { ...state, completed, index, progress: 0, heldSince: null, stepActiveAt: now, phase: 'challenge', resume: null };
@@ -274,20 +309,21 @@ export function advanceChallenge(
   if (!isFaceInCircle(face, turning)) {
     if (state.phase === 'positioning') {
       // Placing the face again measures the neutral again
-      return { ...state, centredSince: null, neutral: null };
+      return { ...state, centredSince: null, neutral: null, hint: faceHint(face) };
     }
     // Lost while turned far enough: the detector dropped a near-profile face, the step is done
     if (state.phase === 'challenge' && state.progress >= config.lostCompletesAt) {
       return { ...completeStep(state, now), lostSince: now };
     }
     const lostSince = state.lostSince ?? now;
+    const hint = faceHint(face, turning);
     if (state.phase !== 'faceLost' && now - lostSince > config.lostGraceMs) {
-      return { ...state, phase: 'faceLost', resume: state.phase, heldSince: null, lostSince };
+      return { ...state, phase: 'faceLost', resume: state.phase, heldSince: null, lostSince, hint };
     }
-    return { ...state, lostSince };
+    return { ...state, lostSince, hint };
   }
 
-  let next: LivenessChallengeState = { ...state, lostSince: null };
+  let next: LivenessChallengeState = { ...state, lostSince: null, hint: null };
   if (next.phase === 'faceLost') {
     // Back in the circle: on with the same step, its time counted afresh
     next = { ...next, phase: next.resume ?? 'challenge', resume: null, stepActiveAt: now, alignedSince: null, misalignedSince: null, smoothed: null };
@@ -347,17 +383,22 @@ export function advanceChallenge(
         pitch: (next.smoothed?.pitch ?? 0) * (1 - weight) + (face.pitch - neutral.pitch) * weight,
       };
       // The circle as the turns had it: the strict start bounds would ask the customer to move back (a face just turned
-      // reads larger and off-centre) when it is already in the circle
-      const aligned =
-        isFaceInCircle(face, true) &&
-        Math.abs(smoothed.yaw) < config.centredDegrees &&
-        Math.abs(smoothed.pitch) < config.centredPitchDegrees &&
+      // reads larger and off-centre) when it is already in the circle. Only a face the circle would cut is too close.
+      // Settling for too long widens the straight check: no customer stays stuck on the last step
+      const centeringSince = next.centeringSince ?? now;
+      next = { ...next, centeringSince };
+      const tolerance = now - centeringSince >= config.centeringTimeoutMs ? 2 : 1;
+      const tooClose = face.size > CAPTURE_MAX_SIZE;
+      const straight =
+        Math.abs(smoothed.yaw) < config.centredDegrees * tolerance &&
+        Math.abs(smoothed.pitch) < config.centredPitchDegrees * tolerance &&
         face.eyesOpen !== false;
-      if (!aligned) {
+      if (tooClose || !straight) {
+        const hint = tooClose ? 'tooClose' : 'turned';
         const misalignedSince = next.misalignedSince ?? now;
         return now - misalignedSince > config.alignGraceMs
-          ? { ...next, smoothed, alignedSince: null, misalignedSince: null }
-          : { ...next, smoothed, misalignedSince };
+          ? { ...next, smoothed, hint, alignedSince: null, misalignedSince: null }
+          : { ...next, smoothed, hint, misalignedSince };
       }
       const alignedSince = next.alignedSince ?? now;
       const settled = { ...next, smoothed, alignedSince, misalignedSince: null };

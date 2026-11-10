@@ -128,11 +128,13 @@ export {
   shuffledDirections,
   directionProgress,
   isFaceInCircle,
+  faceHint,
   currentDirection,
   DEFAULT_CHALLENGE_CONFIG,
 } from "./services/LivenessChallenge";
 export type {
   LivenessDirection,
+  LivenessHint,
   LivenessPhase,
   FaceSample,
   LivenessChallengeConfig,

@@ -31,8 +31,13 @@ export interface OcrValidationState {
 
 /** Configuration for document detection behavior */
 export interface DocumentDetectionConfig {
-  /** Number of consecutive stable frames required for stable detection */
+  /** Number of stable frames required for stable detection (a few missed ones in between are forgiven) */
   stableFramesRequired: number;
+  /**
+   * Frames in a row without the document that don't lose it: edge detection misses frames of a hand-held card (a thumb
+   * over an edge, glare, motion blur), and starting over on each would keep a customer holding still for many seconds
+   */
+  maxMissedFrames: number;
   /** Maximum pixel distance for corners to be considered stable */
   stabilityThreshold: number;
   /** Minimum confidence for auto-capture (0-1) */
@@ -83,16 +88,52 @@ export interface UseDocumentDetectionReturn {
 
 /** Default detection configuration */
 const DEFAULT_CONFIG: DocumentDetectionConfig = {
-  stableFramesRequired: 10,      // Need 10 consecutive good detections
+  stableFramesRequired: 6,       // About 1 s of the document held still, at 6 frames analysed a second
+  maxMissedFrames: 3,            // About 0.5 s without it before it counts as gone
   stabilityThreshold: 40,        // Average corner shift between processed frames, in frame pixels (about 3% of 1280)
   autoCaptureConfidence: 0.75,   // Require 75% confidence for shape detection
   autoCaptureDelay: 500,        // Wait 0.5 second after camera ready before detection starts
-  captureHoldTime: 500,         // Hold document steady for 0.5 second after detection before OCR
+  captureHoldTime: 200,         // A moment more once stable, before the photo
   resetDelay: 1500,
   requireOcrValidation: true,    // Require OCR validation before auto-capture
   ocrValidationInterval: 1000,   // Not used anymore - OCR runs once
   ocrValidationsRequired: 1,     // Only need 1 successful OCR validation - capture immediately after
 };
+
+/** Where the document stands across frames: how long it has held still, and since when it is missing */
+export interface DocumentTrack {
+  /** Good frames since it was found, or last moved */
+  hits: number;
+  /** Frames in a row without it */
+  misses: number;
+  /** Where it was last seen; null once lost */
+  corners: DetectedDocumentCorners | null;
+}
+
+export const EMPTY_TRACK: DocumentTrack = { hits: 0, misses: 0, corners: null };
+
+type TrackConfig = Pick<DocumentDetectionConfig, 'autoCaptureConfidence' | 'stabilityThreshold' | 'maxMissedFrames'>;
+
+/**
+ * The track after one analysed frame. A missed or doubtful frame only pauses the count; a few in a row lose the
+ * document. A document that moved starts its count over
+ */
+export function trackDocument(track: DocumentTrack, detection: DetectionUpdate, cfg: TrackConfig): DocumentTrack {
+  const corners = detection.isDetected ? detection.corners : null;
+  if (corners === null || detection.confidence < cfg.autoCaptureConfidence) {
+    const misses = track.misses + 1;
+    return misses > cfg.maxMissedFrames ? EMPTY_TRACK : { ...track, misses };
+  }
+  const previous = track.corners;
+  // Held steady: the corners stay where they were; a shape that jumps is a new one, its count starts over
+  const shift = previous
+    ? (['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).reduce(
+        (sum, corner) => sum + Math.hypot(corners[corner].x - previous[corner].x, corners[corner].y - previous[corner].y),
+        0
+      ) / 4
+    : 0;
+  return { hits: shift > cfg.stabilityThreshold ? 1 : track.hits + 1, misses: 0, corners };
+}
 
 /** Debug logging */
 const DEBUG_LOGGING = __DEV__ ?? false;
@@ -144,8 +185,6 @@ export function useDocumentDetection(
   });
 
   // Refs for tracking
-  const previousCornersRef = useRef<DetectedDocumentCorners | null>(null);
-  const stableDetectionCountRef = useRef(0);
   const autoCaptureTriggeredRef = useRef(false);
   const ocrValidationCountRef = useRef(0);
   const detectionStartTimeRef = useRef<number | null>(null);
@@ -296,85 +335,36 @@ export function useDocumentDetection(
     }
   }, []);
 
+  const trackRef = useRef<DocumentTrack>(EMPTY_TRACK);
   const updateDetection = useCallback(
     (detection: DetectionUpdate) => {
       if (disableDetection) {
         return;
       }
 
+      const track = trackDocument(trackRef.current, detection, cfg);
+      trackRef.current = track;
+      // Shown as soon as it is seen, and until it is really gone: the guide doesn't flicker on a missed frame
+      showDetection(track.corners, detection.confidence);
+
       // Don't count detections until auto-capture is enabled (camera warmup period)
       // This prevents capturing random objects when camera first opens
       if (!isAutoCaptureEnabled) {
-        // Still show visual feedback but don't increment stability counter
-        if (detection.isDetected && detection.corners) {
-          showDetection(detection.corners, detection.confidence);
-        }
+        trackRef.current = { ...track, hits: 0 };
         return;
       }
 
-      if (detection.isDetected && detection.corners) {
-        // Check if confidence is good enough
-        const hasGoodConfidence = detection.confidence >= cfg.autoCaptureConfidence;
-
-        // Held steady: the corners stay where they were; a shape that jumps is a new one, its count starts over
-        const previous = previousCornersRef.current;
-        const corners = detection.corners;
-        const shift = previous
-          ? (['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).reduce(
-              (sum, corner) => sum + Math.hypot(corners[corner].x - previous[corner].x, corners[corner].y - previous[corner].y),
-              0
-            ) / 4
-          : 0;
-        if (shift > cfg.stabilityThreshold) {
-          stableDetectionCountRef.current = 0;
-          setIsShapeDetected(false);
-        }
-
-        if (hasGoodConfidence) {
-          // Only increment counter for good confidence detections
-          stableDetectionCountRef.current += 1;
-
-          // Update visual feedback
-          showDetection(detection.corners, detection.confidence);
-          previousCornersRef.current = detection.corners;
-
-          // Mark as fully detected after enough consecutive good detections
-          const isStablyDetected = stableDetectionCountRef.current >= cfg.stableFramesRequired;
-
-          // Log stability progress
-          debugLog(`[Detection] Stability: ${stableDetectionCountRef.current}/${cfg.stableFramesRequired}, confidence=${detection.confidence.toFixed(2)}`);
-
-          if (isStablyDetected) {
-            setIsShapeDetected(true);
-          }
-        } else {
-          // Low confidence - reset stability counter, this is not a reliable detection
-          debugLog(`[Detection] Low confidence ${detection.confidence.toFixed(2)} < ${cfg.autoCaptureConfidence}, resetting counter`);
-          stableDetectionCountRef.current = 0;
-          setIsShapeDetected(false);
-          // Still show corners for visual feedback
-          showDetection(detection.corners, detection.confidence);
-        }
-      } else {
-        // No detection - reset everything
-        if (stableDetectionCountRef.current > 0 || previousCornersRef.current !== null) {
-          debugLog(`[Detection] No detection, resetting`);
-          stableDetectionCountRef.current = 0;
-          previousCornersRef.current = null;
-          setIsShapeDetected(false);
-          showDetection(null, 0);
-        }
-      }
+      debugLog(`[Detection] Stability: ${track.hits}/${cfg.stableFramesRequired}, missed ${track.misses}, confidence=${detection.confidence.toFixed(2)}`);
+      setIsShapeDetected(track.hits >= cfg.stableFramesRequired);
     },
-    [disableDetection, isAutoCaptureEnabled, cfg.autoCaptureConfidence, cfg.stableFramesRequired, cfg.stabilityThreshold, showDetection]
+    [disableDetection, isAutoCaptureEnabled, cfg.autoCaptureConfidence, cfg.stableFramesRequired, cfg.stabilityThreshold, cfg.maxMissedFrames, showDetection]
   );
 
   /**
    * Resets all detection state
    */
   const resetDetection = useCallback(() => {
-    stableDetectionCountRef.current = 0;
-    previousCornersRef.current = null;
+    trackRef.current = EMPTY_TRACK;
     shownCornersRef.current = null;
     autoCaptureTriggeredRef.current = false;
     ocrValidationCountRef.current = 0;
